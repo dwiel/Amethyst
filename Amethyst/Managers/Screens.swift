@@ -38,22 +38,27 @@ extension WindowManager {
                     }
 
                     let space = CGSpacesInfo<Window>.space(fromScreenDescription: screenDictionary)
-
-                    guard screenManager.space != space else {
-                        continue
+                    if screenManager.space != space {
+                        screenManager.updateSpace(to: space)
                     }
 
-                    screenManager.updateSpace(to: space)
+                    if let spaces = CGSpacesInfo<Window>.allSpaces(fromScreenDescription: screenDictionary) {
+                        screenManager.pruneLayouts(keepingSpaceUUIDs: Set(spaces.map(\.uuid)))
+                    }
                 }
             } else {
+                let spaces = CGSpacesInfo<Window>.allSpaces(fromScreenDescription: screensInfo.descriptions[0])
+                let spaceUUIDs = spaces.map { Set($0.map(\.uuid)) }
+
                 for screenManager in screenManagers {
                     let space = CGSpacesInfo<Window>.space(fromScreenDescription: screensInfo.descriptions[0])
-
-                    guard screenManager.space != space else {
-                        continue
+                    if screenManager.space != space {
+                        screenManager.updateSpace(to: space)
                     }
 
-                    screenManager.updateSpace(to: space)
+                    if let spaceUUIDs {
+                        screenManager.pruneLayouts(keepingSpaceUUIDs: spaceUUIDs)
+                    }
                 }
             }
         }

@@ -30,6 +30,51 @@ private final class TestDelegate: ScreenManagerDelegate {
 
 class ScreenManagerTests: QuickSpec {
     override func spec() {
+        describe("cached layouts") {
+            it("prunes layouts for Spaces that no longer exist") {
+                let configuration = UserConfiguration(storage: TestConfigurationStorage())
+                configuration.setLayoutKeys([TallLayout<TestWindow>.layoutKey])
+                let manager = ScreenManager<TestDelegate>(
+                    screen: TestScreen(),
+                    delegate: TestDelegate(),
+                    userConfiguration: configuration
+                )
+                let firstSpace = Space(id: 1, type: CGSSpaceTypeUser, uuid: "first")
+                let secondSpace = Space(id: 2, type: CGSSpaceTypeUser, uuid: "second")
+
+                manager.updateSpace(to: firstSpace)
+                manager.updateSpace(to: secondSpace)
+                manager.pruneLayouts(keepingSpaceUUIDs: [secondSpace.uuid])
+
+                let data = try! JSONEncoder().encode(manager)
+                let json = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+                let layoutsBySpaceUUID = json["layoutsBySpaceUUID"] as! [String: Any]
+
+                expect(layoutsBySpaceUUID.keys).to(contain(secondSpace.uuid))
+                expect(layoutsBySpaceUUID.keys).notTo(contain(firstSpace.uuid))
+            }
+
+            it("does not prune the currently tracked Space") {
+                let configuration = UserConfiguration(storage: TestConfigurationStorage())
+                configuration.setLayoutKeys([TallLayout<TestWindow>.layoutKey])
+                let manager = ScreenManager<TestDelegate>(
+                    screen: TestScreen(),
+                    delegate: TestDelegate(),
+                    userConfiguration: configuration
+                )
+                let currentSpace = Space(id: 1, type: CGSSpaceTypeUser, uuid: "current")
+
+                manager.updateSpace(to: currentSpace)
+                manager.pruneLayouts(keepingSpaceUUIDs: [])
+
+                let data = try! JSONEncoder().encode(manager)
+                let json = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+                let layoutsBySpaceUUID = json["layoutsBySpaceUUID"] as! [String: Any]
+
+                expect(layoutsBySpaceUUID.keys).to(contain(currentSpace.uuid))
+            }
+        }
+
         describe("coding") {
             it("decodes layouts") {
                 let configuration = UserConfiguration(storage: TestConfigurationStorage())

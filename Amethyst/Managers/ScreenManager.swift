@@ -172,6 +172,16 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
         }
     }
 
+    func pruneLayouts(keepingSpaceUUIDs spaceUUIDs: Set<String>) {
+        var spaceUUIDs = spaceUUIDs
+        if let currentSpaceUUID = space?.uuid {
+            spaceUUIDs.insert(currentSpaceUUID)
+        }
+
+        layoutsBySpaceUUID = layoutsBySpaceUUID.filter { spaceUUIDs.contains($0.key) }
+        currentLayoutIndexBySpaceUUID = currentLayoutIndexBySpaceUUID.filter { spaceUUIDs.contains($0.key) }
+    }
+
     func distributeEvent(_ change: Change<Window>) {
         switch change {
         case let .add(window: window):
@@ -250,13 +260,21 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
             return
         }
 
-        guard userConfiguration.tilingEnabled, space?.type == CGSSpaceTypeUser else {
+        guard userConfiguration.tilingEnabled else {
             return
         }
 
-        // During rapid Space transitions, activation/focus notifications can arrive before
-        // this screen manager updates its tracked Space. Skip reflow if state is stale.
-        guard let currentSpace = CGSpacesInfo<Window>.currentSpaceForScreen(screen), currentSpace.id == space?.id else {
+        guard let currentSpace = CGSpacesInfo<Window>.currentSpaceForScreen(screen), currentSpace.type == CGSSpaceTypeUser else {
+            return
+        }
+
+        // Space-change notifications and accessibility notifications are delivered by
+        // independent systems. If the accessibility event wins the race, merely skipping
+        // this reflow can leave the screen stale indefinitely. Synchronize the tracked Space
+        // and queue a fresh reflow instead.
+        guard currentSpace == space else {
+            updateSpace(to: currentSpace)
+            setNeedsReflow()
             return
         }
 
