@@ -22,6 +22,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     fileprivate var windowManager: WindowManager<SIApplication>?
     private var hotKeyManager: HotKeyManager<SIApplication>?
+    private var accessibilityPermissionTimer: Timer?
 
     fileprivate var statusItem: NSStatusItem?
     @IBOutlet var statusItemMenu: NSMenu?
@@ -81,6 +82,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hotKeyManager = HotKeyManager(userConfiguration: UserConfiguration.shared)
 
         hotKeyManager?.setUpWithWindowManager(windowManager!, configuration: UserConfiguration.shared, appDelegate: self)
+        monitorAccessibilityPermissionIfNeeded()
     }
 
     override func awakeFromNib() {
@@ -118,6 +120,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        accessibilityPermissionTimer?.invalidate()
+
         defer {
             log.info("Amethyst terminating")
             _ = log.flush(secondTimeout: 2)
@@ -190,6 +194,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 UserDefaults.standard.set(true, forKey: "disable-dotfile-conflict-warning")
             }
         }
+    }
+
+    private func monitorAccessibilityPermissionIfNeeded() {
+        guard !UserConfiguration.shared.hasAccessibilityPermissions,
+              accessibilityPermissionTimer == nil else {
+            return
+        }
+
+        log.info("Accessibility permission is unavailable; monitoring for approval")
+
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] timer in
+            guard UserConfiguration.shared.confirmAccessibilityPermissions(prompt: false) else {
+                return
+            }
+
+            timer.invalidate()
+            self?.accessibilityPermissionTimer = nil
+            UserConfiguration.shared.hasAccessibilityPermissions = true
+        }
+        accessibilityPermissionTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func populateLayoutsMenu() {
@@ -286,6 +311,14 @@ extension AppDelegate: UserConfigurationDelegate {
     }
 
     func configurationAccessibilityPermissionsDidChange(_ userConfiguration: UserConfiguration) {
+        guard userConfiguration.hasAccessibilityPermissions else {
+            monitorAccessibilityPermissionIfNeeded()
+            return
+        }
+
+        accessibilityPermissionTimer?.invalidate()
+        accessibilityPermissionTimer = nil
+        log.info("Accessibility permission became available; rebuilding window observations")
         windowManager?.reevaluateWindows()
     }
 }

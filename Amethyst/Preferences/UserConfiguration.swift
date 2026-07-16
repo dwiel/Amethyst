@@ -782,9 +782,9 @@ class UserConfiguration: NSObject {
 }
 
 extension UserConfiguration {
-    @discardableResult func confirmAccessibilityPermissions() -> Bool {
+    @discardableResult func confirmAccessibilityPermissions(prompt: Bool = true) -> Bool {
         let options = [
-            kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true
+            kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: prompt
         ]
 
         return AXIsProcessTrustedWithOptions(options as CFDictionary)
