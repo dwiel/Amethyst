@@ -33,6 +33,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var isFirstLaunch = true
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let persistentLogFileURL = configurePersistentLogging()
+
         #if DEBUG
             log.addDestination(ConsoleDestination())
         #endif
@@ -45,6 +47,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         log.info("Logging is enabled")
         log.debug("Debug logging is enabled")
+        log.info("Persistent log file: \(persistentLogFileURL?.path ?? "unavailable")")
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+        log.info(
+            "Amethyst launch: version=\(version) build=\(build) " +
+                "pid=\(ProcessInfo.processInfo.processIdentifier) arguments=\(CommandLine.arguments)"
+        )
 
         UserConfiguration.shared.delegate = self
         UserConfiguration.shared.load()
@@ -109,6 +118,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        defer {
+            log.info("Amethyst terminating")
+            _ = log.flush(secondTimeout: 2)
+        }
+
         guard let windowManager = windowManager else {
             return
         }

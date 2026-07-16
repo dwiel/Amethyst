@@ -201,9 +201,13 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
     }
 
     func setNeedsReflow() {
+        let cancelledOperationCount = reflowOperationQueue.operationCount
         reflowOperationQueue.cancelAllOperations()
 
-        log.debug("Screen: \(screen?.screenID() ?? "unknown") reflow")
+        log.debug(
+            "Reflow requested: screen=\(screen?.screenID() ?? "unknown") " +
+                "trackedSpace=\(String(describing: space)) cancelledOperations=\(cancelledOperationCount)"
+        )
 
         DispatchQueue.main.async {
             self.minimizeWindows()
@@ -247,14 +251,19 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
 
     private func reflow() {
         guard let screen = screen else {
+            log.warning("Reflow skipped: no screen")
             return
         }
 
+        let screenID = screen.screenID() ?? "unknown"
+
         guard userConfiguration.tilingEnabled else {
+            log.debug("Reflow skipped: screen=\(screenID) tiling disabled")
             return
         }
 
         guard let currentSpace = CGSpacesInfo<Window>.currentSpaceForScreen(screen), currentSpace.type == CGSSpaceTypeUser else {
+            log.warning("Reflow skipped: screen=\(screenID) current user Space unavailable")
             return
         }
 
@@ -263,18 +272,38 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
         // this reflow can leave the screen stale indefinitely. Synchronize the tracked Space
         // and queue a fresh reflow instead.
         guard currentSpace == space else {
+            log.warning(
+                "Reflow retry for stale Space: screen=\(screenID) " +
+                    "trackedSpace=\(String(describing: space)) currentSpace=\(currentSpace)"
+            )
             updateSpace(to: currentSpace)
             setNeedsReflow()
             return
         }
 
         guard let windows = delegate?.activeWindowSet(forScreenManager: self) else {
+            log.warning("Reflow skipped: screen=\(screenID) active window set unavailable")
             return
         }
 
-        guard let layout = currentLayout, let frameAssignments = layout.frameAssignments(windows, on: screen) else {
+        guard let layout = currentLayout else {
+            log.warning("Reflow skipped: screen=\(screenID) current layout unavailable")
             return
         }
+
+        guard let frameAssignments = layout.frameAssignments(windows, on: screen) else {
+            log.warning(
+                "Reflow skipped: screen=\(screenID) space=\(currentSpace.uuid) " +
+                    "layout=\(layout.layoutKey) frame assignments unavailable windows=\(windows.windows.count)"
+            )
+            return
+        }
+
+        log.debug(
+            "Reflow scheduling: screen=\(screenID) screenFrame=\(screen.frame()) " +
+                "space=\(currentSpace.uuid) layout=\(layout.layoutKey) " +
+                "windows=\(windows.windows.count) assignments=\(frameAssignments.count)"
+        )
 
         // TODO: fix mff
 //        let mouseFollowsFocus = userConfiguration.mouseFollowsFocus()
@@ -284,8 +313,17 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
         // The complete operation should execute the completion delegate call
         completeOperation.addExecutionBlock { [unowned completeOperation, weak self] in
             if completeOperation.isCancelled {
+                log.debug(
+                    "Reflow completion cancelled: screen=\(screenID) space=\(currentSpace.uuid) " +
+                        "layout=\(layout.layoutKey) assignments=\(frameAssignments.count)"
+                )
                 return
             }
+
+            log.debug(
+                "Reflow completed: screen=\(screenID) space=\(currentSpace.uuid) " +
+                    "layout=\(layout.layoutKey) assignments=\(frameAssignments.count)"
+            )
 
             DispatchQueue.main.async {
                 self?.delegate?.onReflowCompletion()

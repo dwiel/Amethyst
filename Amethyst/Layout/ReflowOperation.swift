@@ -95,10 +95,17 @@ struct WindowSet<Window: WindowType> {
 
     func perform(frameAssignment: FrameAssignment<Window>) {
         guard let window = windowForID(frameAssignment.window.id) else {
+            log.warning("Frame assignment skipped: window=\(frameAssignment.window.id) is no longer tracked")
             return
         }
 
-        guard isWindowWithIDActive(frameAssignment.window.id), !isWindowWithIDFloating(frameAssignment.window.id) else {
+        guard isWindowWithIDActive(frameAssignment.window.id) else {
+            log.debug("Frame assignment skipped: window=\(frameAssignment.window.id) is inactive")
+            return
+        }
+
+        guard !isWindowWithIDFloating(frameAssignment.window.id) else {
+            log.debug("Frame assignment skipped: window=\(frameAssignment.window.id) is floating")
             return
         }
 
@@ -118,6 +125,7 @@ class FrameAssignmentOperation<Window: WindowType>: Operation {
 
     override func main() {
         guard !isCancelled else {
+            log.debug("Frame assignment cancelled: window=\(frameAssignment.window.id)")
             return
         }
 
@@ -206,8 +214,14 @@ struct FrameAssignment<Window: WindowType> {
 
     /// Perform the actual application of the frame to the window
     func perform(withWindow window: Window) {
+        let originalFrame = window.frame()
         var finalFrame = self.finalFrame
         var finalOrigin = finalFrame.origin
+
+        log.debug(
+            "Frame assignment applying: window=\(window.id()) captured=\(self.window.frame) " +
+                "observed=\(originalFrame) target=\(finalFrame) screen=\(screenFrame) focused=\(window.isFocused())"
+        )
 
         // If this is the focused window then we need to shift it to be on screen regardless of size
         // We call this "window peeking" (this line here to aid in text search)
@@ -233,5 +247,9 @@ struct FrameAssignment<Window: WindowType> {
         DispatchQueue.main.sync {
             window.setFrame(finalFrame, withThreshold: CGSize(width: 1, height: 1))
         }
+
+        log.debug(
+            "Frame assignment applied: window=\(window.id()) requested=\(finalFrame) observed=\(window.frame())"
+        )
     }
 }
