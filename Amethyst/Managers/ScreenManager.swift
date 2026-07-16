@@ -172,16 +172,6 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
         }
     }
 
-    func pruneLayouts(keepingSpaceUUIDs spaceUUIDs: Set<String>) {
-        var spaceUUIDs = spaceUUIDs
-        if let currentSpaceUUID = space?.uuid {
-            spaceUUIDs.insert(currentSpaceUUID)
-        }
-
-        layoutsBySpaceUUID = layoutsBySpaceUUID.filter { spaceUUIDs.contains($0.key) }
-        currentLayoutIndexBySpaceUUID = currentLayoutIndexBySpaceUUID.filter { spaceUUIDs.contains($0.key) }
-    }
-
     func distributeEvent(_ change: Change<Window>) {
         switch change {
         case let .add(window: window):
