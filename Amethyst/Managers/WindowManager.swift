@@ -925,13 +925,17 @@ extension WindowManager: WindowTransitionTarget {
             distributeEventToAllScreens(.windowSwap(window: window, otherWindow: otherWindow))
             markAllScreensForReflow()
         case let .moveWindowToScreen(window, screen):
-            let currentScreen = window.screen()
+            // Capture source before move — after moveScaled, window.screen() is the target.
+            let sourceScreen = window.screen()
             window.moveScaled(to: screen)
-            if currentScreen != nil {
-                distributeEventToScreen(screen, change: .remove(window: window))
-                markScreenForReflow(screen)
+            if let sourceScreen, sourceScreen.screenID() != screen.screenID() {
+                // Source must get remove + reflow; previously both went to the target,
+                // leaving the origin screen with stale frame sizes (empty pane gaps).
+                distributeEventToScreen(sourceScreen, change: .remove(window: window))
+                markScreenForReflow(sourceScreen)
             }
             distributeEventToScreen(screen, change: .add(window: window))
+            markScreenForReflow(screen)
             window.focus()
         case let .moveWindowToSpaceAtIndex(window, spaceIndex, sourceSpaceIndex):
             guard
@@ -947,6 +951,7 @@ extension WindowManager: WindowTransitionTarget {
                 return
             }
             distributeEventToScreen(screen, change: .remove(window: window))
+            markScreenForReflow(screen)
             eventQueue.append(PendingEvent(screen: targetScreen, event: .add(window: window)))
             window.move(toSpaceAtIndex: UInt(spaceIndex + 1))
             if targetScreen.screenID() != screen.screenID() {
