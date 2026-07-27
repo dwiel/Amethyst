@@ -74,6 +74,7 @@ rg 'Reflow (scheduling|completed|skipped|retry)|Frame assignment|Window Change: 
 | `Frame assignment applying: ... captured=… target=…` | Intended resize (captured ≠ target = change) |
 | `Frame assignment applied: ... requested=… observed=…` | AX result; mismatch often min-size clamp (Telegram/WhatsApp) |
 | `Reflow retry for stale Space` | Space race; patch should resync + re-queue |
+| `Active window set drift: … — reflowing` | Silent active-set reconcile (0.24.3.4+); live membership ≠ last reflow snapshot |
 | `windows=0 assignments=0` | Often Accessibility not trusted yet |
 | `Failed to add observer ... -25211` | Accessibility disabled for this binary |
 
