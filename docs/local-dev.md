@@ -101,6 +101,7 @@ if let wins = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
 1. **Stale Space skip** — accessibility/space race used to drop reflows forever; `ScreenManager.reflow` resyncs Space and re-queues.
 2. **Accessibility recovery** — if trust appears after launch, poll once/sec then `reevaluateWindows()`.
 3. **Cross-screen throw leaves source stale** — `moveWindowToScreen` used to send `remove`+reflow to the **target** only. Fix: remove+reflow **source**, add+reflow **target**. Same idea: reflow source on space throw. Symptom: empty pane gap after throwing a window to another display.
+4. **Silent active-set drift / empty pane** — a window can leave the current Space (Mission Control drag, app self-move, missed AX remove) without any remove/space notification. Remaining windows keep old frames (e.g. half-width alone). Fix: regenerate on-screen cache every reflow + 1s reconcile timer compares live active IDs vs last reflow snapshot and reflows on drift. Log: `Active window set drift: … — reflowing`.
 
 ## Commit / push
 

@@ -67,6 +67,11 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
     private var pendingTabDetection: [Window.WindowID: Window] = [:]
     private var earlyFocusedWindows: Set<Window.WindowID> = []
     private var eventQueue: [PendingEvent] = []
+    /// Last active (on-screen, current-space) window IDs per screen after a reflow.
+    /// Used to detect silent departures (Mission Control drag, app self-move) that
+    /// never deliver remove/space-change notifications — classic empty-pane gaps.
+    private var lastActiveWindowIDsByScreen: [String: Set<CGWindowID>] = [:]
+    private var activeWindowReconcileTimer: Timer?
 
     private lazy var mouseStateKeeper = MouseStateKeeper(delegate: self)
     private lazy var applicationEventHandler = ApplicationEventHandler(delegate: self)
@@ -108,14 +113,75 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
         )
 
         installApplicationMonitor()
+        startActiveWindowReconcileTimer()
 
         reevaluateWindows()
         screens.updateScreens(windowManager: self)
     }
 
     deinit {
+        activeWindowReconcileTimer?.invalidate()
+        activeWindowReconcileTimer = nil
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         NotificationCenter.default.removeObserver(self)
+    }
+
+    private func startActiveWindowReconcileTimer() {
+        activeWindowReconcileTimer?.invalidate()
+        // 1s is enough to close empty-pane gaps without fighting interactive drag.
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.reconcileActiveWindowsIfNeeded()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        activeWindowReconcileTimer = timer
+    }
+
+    /// Detect when the live on-screen active set drifts from the last reflow without
+    /// Amethyst receiving a remove/space event (e.g. Mission Control window move).
+    @objc private func reconcileActiveWindowsIfNeeded() {
+        guard userConfiguration.tilingEnabled else {
+            return
+        }
+
+        // Do not reflow mid-drag / mid-resize or while a reflow just finished applying frames.
+        switch mouseStateKeeper.state {
+        case .pointing, .doneDragging:
+            break
+        default:
+            return
+        }
+        guard Date().timeIntervalSince(lastReflowTime) > mouseStateKeeper.dragRaceThresholdSeconds * 2 else {
+            return
+        }
+
+        windows.regenerateActiveIDCache()
+
+        for screenManager in screens.screenManagers {
+            guard let screen = screenManager.screen, let screenID = screen.screenID() else {
+                continue
+            }
+
+            let activeIDs = Set(windows.activeWindows(onScreen: screen).map { $0.cgID() })
+            let previousIDs = lastActiveWindowIDsByScreen[screenID]
+
+            // First observation after launch: seed without forcing a duplicate reflow.
+            guard let previousIDs else {
+                lastActiveWindowIDsByScreen[screenID] = activeIDs
+                continue
+            }
+
+            guard previousIDs != activeIDs else {
+                continue
+            }
+
+            log.debug(
+                "Active window set drift: screen=\(screenID) " +
+                    "previous=\(previousIDs.sorted()) current=\(activeIDs.sorted()) — reflowing"
+            )
+            // Update immediately so we do not thrash every tick while the reflow is queued.
+            lastActiveWindowIDsByScreen[screenID] = activeIDs
+            markScreenForReflow(screen)
+        }
     }
 
     func reset() {
@@ -694,6 +760,18 @@ extension WindowManager {
         // latest time that a reflow took place.
         mouseStateKeeper.handleReflowEvent()
         lastReflowTime = Date()
+
+        // Snapshot the active set Amethyst just laid out so silent departures can be
+        // detected by reconcileActiveWindowsIfNeeded().
+        windows.regenerateActiveIDCache()
+        for screenManager in screens.screenManagers {
+            guard let screen = screenManager.screen, let screenID = screen.screenID() else {
+                continue
+            }
+            lastActiveWindowIDsByScreen[screenID] = Set(
+                windows.activeWindows(onScreen: screen).map { $0.cgID() }
+            )
+        }
     }
 
     func doMouseFollowsFocus(focusedWindow: Window) {
@@ -1054,6 +1132,9 @@ extension WindowManager: ScreenManagerDelegate {
     }
 
     func activeWindowSet(forScreenManager screenManager: ScreenManager<WindowManager<Application>>) -> WindowSet<Window> {
+        // Always use a fresh on-screen ID cache so reflows exclude windows that
+        // left the space without a remove notification.
+        windows.regenerateActiveIDCache()
         return windows.windowSet(forActiveWindowsOnScreen: screenManager.screen!)
     }
 }
