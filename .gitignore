@@ -27,3 +27,7 @@ fastlane/report.xml
 # Homebrew
 Brewfile.lock.json
 
+
+# Local build and comparison artifacts
+.build/
+artifacts/
