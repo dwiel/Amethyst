@@ -13,6 +13,7 @@
 		400540F22325CDF4004B8656 /* Reliability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 400540F12325CDF4004B8656 /* Reliability.swift */; };
 		4006CF881CDFF5F6004CA512 /* NSRunningApplication+Manageable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4006CF871CDFF5F6004CA512 /* NSRunningApplication+Manageable.swift */; };
 		4006CF8E1CDFFE90004CA512 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4006CF8D1CDFFE90004CA512 /* AppDelegate.swift */; };
+		D00C0A012E66200100C0FFEE /* ContextCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00C0A002E66200100C0FFEE /* ContextCapture.swift */; };
 		4006CF901CE017BA004CA512 /* UserConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4006CF8F1CE017BA004CA512 /* UserConfiguration.swift */; };
 		400A5E9D2327350C00F0A2C3 /* Space.swift in Sources */ = {isa = PBXBuildFile; fileRef = 400A5E9C2327350C00F0A2C3 /* Space.swift */; };
 		400D48F42A92AF1E0082750F /* Cartography in Frameworks */ = {isa = PBXBuildFile; productRef = 400D48F32A92AF1E0082750F /* Cartography */; };
@@ -150,6 +151,7 @@
 		400540F12325CDF4004B8656 /* Reliability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Reliability.swift; sourceTree = "<group>"; };
 		4006CF871CDFF5F6004CA512 /* NSRunningApplication+Manageable.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = "NSRunningApplication+Manageable.swift"; sourceTree = "<group>"; };
 		4006CF8D1CDFFE90004CA512 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		D00C0A002E66200100C0FFEE /* ContextCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextCapture.swift; sourceTree = "<group>"; };
 		4006CF8F1CE017BA004CA512 /* UserConfiguration.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = UserConfiguration.swift; sourceTree = "<group>"; };
 		400A5E9C2327350C00F0A2C3 /* Space.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Space.swift; sourceTree = "<group>"; };
 		40111CC8223370FD003D20BD /* SIWindow+AmethystTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SIWindow+AmethystTests.swift"; sourceTree = "<group>"; };
@@ -442,6 +444,7 @@
 				40B337E51745D1600001D8FC /* Categories */,
 				40B337E11745CE340001D8FC /* Layout */,
 				4006CF8D1CDFFE90004CA512 /* AppDelegate.swift */,
+				D00C0A002E66200100C0FFEE /* ContextCapture.swift */,
 				402DB6F61742E41A00D1C936 /* MainMenu.xib */,
 				40AF71D920BB348300F58EA9 /* Images.xcassets */,
 				402DB6E81742E41A00D1C936 /* Supporting Files */,
@@ -827,6 +830,7 @@
 				40CF37C429BAC18300CDB07A /* ScreensInfo.swift in Sources */,
 				4062AD371C1FA83300DB612B /* RowLayout.swift in Sources */,
 				4006CF8E1CDFFE90004CA512 /* AppDelegate.swift in Sources */,
+				D00C0A012E66200100C0FFEE /* ContextCapture.swift in Sources */,
 				4006CF901CE017BA004CA512 /* UserConfiguration.swift in Sources */,
 				4062AD2B1C1F99EA00DB612B /* FloatingLayout.swift in Sources */,
 				401BC8A21CE8D86B00F89B3F /* ShortcutsPreferencesViewController.swift in Sources */,

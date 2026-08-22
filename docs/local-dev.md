@@ -103,6 +103,7 @@ if let wins = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
 2. **Accessibility recovery** — if trust appears after launch, poll once/sec then `reevaluateWindows()`.
 3. **Cross-screen throw leaves source stale** — `moveWindowToScreen` used to send `remove`+reflow to the **target** only. Fix: remove+reflow **source**, add+reflow **target**. Same idea: reflow source on space throw. Symptom: empty pane gap after throwing a window to another display.
 4. **Silent active-set drift / empty pane** — a window can leave the current Space (Mission Control drag, app self-move, missed AX remove) without any remove/space notification. Remaining windows keep old frames (e.g. half-width alone). Fix: regenerate on-screen cache every reflow + 1s reconcile timer compares live active IDs vs last reflow snapshot and reflows on drift. Log: `Active window set drift: … — reflowing`.
+5. **Native context capture** — `ContextCapture.swift` replaces Hammerspoon as the producer of `~/.context/YYYY-MM-DD.jsonl`. It preserves focus/space, 15s input-count pulses, idle, sleep/wake, lock/unlock, and the existing problem-tag state. Consumers remain `hscontext`, `attention`, `focus-time`, `context-search`, `life-timeline`, and `life-metrics`. Health: `attention doctor`; launch proof: `rg 'Context capture started' ~/Library/Logs/Amethyst/Amethyst.log | tail -3`. It intentionally drops Hammerspoon's unused snapshots and iTerm AppleScript CWD lookup (Atuin remains the shell/CWD source).
 
 ## Commit / push
 

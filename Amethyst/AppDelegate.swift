@@ -83,6 +83,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotKeyManager?.setUpWithWindowManager(windowManager!, configuration: UserConfiguration.shared, appDelegate: self)
         monitorAccessibilityPermissionIfNeeded()
+        ContextCapture.shared.start()
     }
 
     override func awakeFromNib() {
