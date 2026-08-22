@@ -30,11 +30,13 @@ MARKETING_VERSION=0.24.3.N CURRENT_PROJECT_VERSION=129.N ./scripts/build-local.s
 
 # Install (backup previous if you care)
 pkill -x Amethyst || true
-rm -rf /Applications/Amethyst.app
+trash /Applications/Amethyst.app
 cp -R .build/DerivedData/Build/Products/Release/Amethyst.app /Applications/
 codesign --force --deep --sign 5ACFCCF4BC98802BBE98D36A3499B4847395764A --timestamp=none /Applications/Amethyst.app
-open -a /Applications/Amethyst.app
+open -g -a /Applications/Amethyst.app
 ```
+
+Agents: `open -a` (no `-g`) is focus-guard denied (exit 77) because it steals keystrokes. `open -g` launches without activating. `rm -rf` of the app is PreToolUse-denied; `trash` then `cp -R`. After relaunch, wait ~15s and `attention doctor` should show `capture: native Amethyst`.
 
 - Script: `scripts/build-local.sh`
 - Identity: **Amethyst Local Development** (`5ACFCCF4BC98802BBE98D36A3499B4847395764A`)
