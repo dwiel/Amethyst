@@ -1138,3 +1138,85 @@ extension WindowManager: ScreenManagerDelegate {
         return windows.windowSet(forActiveWindowsOnScreen: screenManager.screen!)
     }
 }
+
+extension WindowManager where Application == SIApplication {
+    /// A durable description of top-level windows across every Space.
+    ///
+    /// WindowManager supplies exact titles for windows it has already seen. The CG
+    /// window list fills in windows on Spaces that have not been visited since launch,
+    /// so a snapshot never silently collapses to the current Space.
+    func contextWindowSnapshot() -> [[String: Any]] {
+        var trackedWindows: [CGWindowID: AXWindow] = [:]
+        for window in windows.windows {
+            trackedWindows[window.cgID()] = window
+        }
+        guard let descriptions = CGWindowsInfo<AXWindow>(options: .optionAll, windowID: 0)?.descriptions else {
+            return []
+        }
+
+        let displayTop = NSScreen.screens.map(\.frame.maxY).max() ?? 0
+
+        return descriptions.compactMap { description in
+            guard let number = description[kCGWindowNumber as String] as? NSNumber,
+                  let ownerPID = description[kCGWindowOwnerPID as String] as? NSNumber,
+                  let layer = description[kCGWindowLayer as String] as? NSNumber,
+                  layer.intValue == 0,
+                  let bounds = description[kCGWindowBounds as String] as? [String: AnyObject],
+                  let x = (bounds["X"] as? NSNumber)?.doubleValue,
+                  let y = (bounds["Y"] as? NSNumber)?.doubleValue,
+                  let width = (bounds["Width"] as? NSNumber)?.doubleValue,
+                  let height = (bounds["Height"] as? NSNumber)?.doubleValue else {
+                return nil
+            }
+
+            let windowID = CGWindowID(number.uint32Value)
+            let pid = pid_t(ownerPID.int32Value)
+            let runningApplication = NSRunningApplication(processIdentifier: pid)
+            guard runningApplication?.isManageable == .manageable else { return nil }
+
+            let trackedWindow = trackedWindows[windowID]
+            // Chrome and other apps expose short tab-strip/helper surfaces as layer-zero
+            // windows. Retain any known AX window, but discard unknown slivers.
+            guard trackedWindow != nil || (width >= 200 && height >= 150) else { return nil }
+
+            let frame = CGRect(x: x, y: y, width: width, height: height)
+            let cocoaFrame = CGRect(x: x, y: displayTop - y - height, width: width, height: height)
+            let inferredScreen = NSScreen.screens.max { left, right in
+                left.frame.intersection(cocoaFrame).area < right.frame.intersection(cocoaFrame).area
+            }
+            let trackedScreen: AMScreen? = trackedWindow?.screen()
+            let isOnScreen = (description[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? false
+            let title = trackedWindow?.title() ?? description[kCGWindowName as String] as? String ?? ""
+            var record: [String: Any] = [
+                "app": runningApplication?.localizedName ?? applications[pid]?.title() ?? "unknown",
+                "title": title,
+                "pid": Int(pid),
+                "window_id": Int(windowID),
+                "screen": trackedScreen?.screen.localizedName ?? inferredScreen?.localizedName ?? "unknown",
+                "frame": [
+                    "x": frame.origin.x,
+                    "y": frame.origin.y,
+                    "width": frame.size.width,
+                    "height": frame.size.height,
+                ],
+                "focused": trackedWindow?.isFocused() ?? false,
+                "active": trackedWindow?.isActive() ?? isOnScreen,
+                "floating": trackedWindow.map { windows.isWindowFloating($0) } ?? false,
+            ]
+            if let bundleIdentifier = runningApplication?.bundleIdentifier {
+                record["bundle"] = bundleIdentifier
+            }
+            if let space = CGWindowsInfo<AXWindow>.windowSpace(windowID) {
+                record["space"] = space
+            }
+            return record
+        }
+    }
+}
+
+private extension CGRect {
+    var area: CGFloat {
+        guard !isNull else { return 0 }
+        return width * height
+    }
+}

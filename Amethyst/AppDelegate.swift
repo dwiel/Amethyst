@@ -83,6 +83,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotKeyManager?.setUpWithWindowManager(windowManager!, configuration: UserConfiguration.shared, appDelegate: self)
         monitorAccessibilityPermissionIfNeeded()
+        ContextCapture.shared.windowSnapshotProvider = { [weak self] in
+            return self?.windowManager?.contextWindowSnapshot() ?? []
+        }
         ContextCapture.shared.start()
     }
 

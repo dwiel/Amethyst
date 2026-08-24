@@ -15,6 +15,10 @@ import Foundation
 final class ContextCapture: NSObject {
     static let shared = ContextCapture()
 
+    /// Supplied by WindowManager so snapshots include tracked background-Space windows,
+    /// not just the windows AX happens to expose on the active Space.
+    var windowSnapshotProvider: (() -> [[String: Any]])?
+
     private let contextDirectory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".context", isDirectory: true)
     private let writerQueue = DispatchQueue(label: "com.amethyst.context-capture.writer")
     private let pulseInterval: TimeInterval = 15
@@ -27,6 +31,7 @@ final class ContextCapture: NSObject {
     private var pulseTimer: Timer?
     private var idleTimer: Timer?
     private var lastFocusFingerprint: String?
+    private var lastWindowSnapshotFingerprint: String?
     private var isIdle = false
     private var keys = 0
     private var clicks = 0
@@ -62,8 +67,9 @@ final class ContextCapture: NSObject {
         append(event: "startup", data: ["capture": "amethyst"])
         captureFocus(force: true)
         emitActivityPulse()
+        captureWindowSnapshot(force: true)
         checkIdle()
-        log.info("Context capture started: ~/.context (focus 1s, activity 15s, idle 120s)")
+        log.info("Context capture started: ~/.context (focus 1s, activity/window snapshots 15s, idle 120s)")
     }
 
     private func setUpWorkspaceObservers() {
@@ -84,6 +90,7 @@ final class ContextCapture: NSObject {
         }
         pulseTimer = Timer(timeInterval: pulseInterval, repeats: true) { [weak self] _ in
             self?.emitActivityPulse()
+            self?.captureWindowSnapshot()
         }
         idleTimer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             self?.checkIdle()
@@ -215,6 +222,33 @@ final class ContextCapture: NSObject {
         append(event: "activity", data: data)
     }
 
+    /// Records every manageable top-level window across all Spaces. Focus events only
+    /// describe the window Zach touched; this snapshot preserves the background layout
+    /// needed to reconstruct the desktop after an unexpected restart.
+    private func captureWindowSnapshot(force: Bool = false) {
+        var snapshot = windowSnapshotProvider?() ?? []
+
+        snapshot.sort { lhs, rhs in
+            let leftSpace = lhs["space"] as? Int ?? Int.max
+            let rightSpace = rhs["space"] as? Int ?? Int.max
+            if leftSpace != rightSpace { return leftSpace < rightSpace }
+            let leftApp = lhs["app"] as? String ?? ""
+            let rightApp = rhs["app"] as? String ?? ""
+            if leftApp != rightApp { return leftApp < rightApp }
+            return (lhs["window_id"] as? Int ?? 0) < (rhs["window_id"] as? Int ?? 0)
+        }
+
+        guard JSONSerialization.isValidJSONObject(snapshot),
+              let encoded = try? JSONSerialization.data(withJSONObject: snapshot),
+              let fingerprint = String(data: encoded, encoding: .utf8) else {
+            log.error("Context capture could not encode window snapshot")
+            return
+        }
+        guard force || fingerprint != lastWindowSnapshotFingerprint else { return }
+        lastWindowSnapshotFingerprint = fingerprint
+        append(event: "window_snapshot", data: ["windows": snapshot])
+    }
+
     private func checkIdle() {
         let seconds = idleSeconds()
         if seconds >= idleThreshold, !isIdle {
@@ -297,9 +331,11 @@ final class ContextCapture: NSObject {
         }
         append(event: "space", data: data)
         captureFocus(force: true)
+        captureWindowSnapshot()
     }
 
     @objc private func systemWillSleep(_ notification: Notification) {
+        captureWindowSnapshot(force: true)
         append(event: "sleep")
     }
 
@@ -318,6 +354,7 @@ final class ContextCapture: NSObject {
     }
 
     @objc private func sessionDidResignActive(_ notification: Notification) {
+        captureWindowSnapshot(force: true)
         append(event: "lock")
     }
 
