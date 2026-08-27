@@ -1365,6 +1365,7 @@ extension WindowManager where Application == SIApplication {
         }
 
         let displayTop = NSScreen.screens.map(\.frame.maxY).max() ?? 0
+        let userSpaces = CGSpacesInfo<AXWindow>.spacesForAllScreens(includeOnlyUserSpaces: true) ?? []
 
         return descriptions.compactMap { description in
             guard let number = description[kCGWindowNumber as String] as? NSNumber,
@@ -1418,6 +1419,9 @@ extension WindowManager where Application == SIApplication {
             }
             if let space = CGWindowsInfo<AXWindow>.windowSpace(windowID) {
                 record["space"] = space
+                if let index = userSpaces.firstIndex(where: { $0.id == CGSSpaceID(space) }) {
+                    record["desktop"] = index + 1
+                }
             }
             return record
         }

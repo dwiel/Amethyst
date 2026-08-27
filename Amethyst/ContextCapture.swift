@@ -238,15 +238,25 @@ final class ContextCapture: NSObject {
             return (lhs["window_id"] as? Int ?? 0) < (rhs["window_id"] as? Int ?? 0)
         }
 
-        guard JSONSerialization.isValidJSONObject(snapshot),
-              let encoded = try? JSONSerialization.data(withJSONObject: snapshot),
+        var payload: [String: Any] = ["windows": snapshot]
+        if let spaces = CGSpacesInfo<AXWindow>.spacesForAllScreens(includeOnlyUserSpaces: true) {
+            payload["desktops"] = spaces.enumerated().map { index, space -> [String: Any] in
+                [
+                    "desktop": index + 1,
+                    "space": Int(space.id),
+                ]
+            }
+        }
+
+        guard JSONSerialization.isValidJSONObject(payload),
+              let encoded = try? JSONSerialization.data(withJSONObject: payload),
               let fingerprint = String(data: encoded, encoding: .utf8) else {
             log.error("Context capture could not encode window snapshot")
             return
         }
         guard force || fingerprint != lastWindowSnapshotFingerprint else { return }
         lastWindowSnapshotFingerprint = fingerprint
-        append(event: "window_snapshot", data: ["windows": snapshot])
+        append(event: "window_snapshot", data: payload)
     }
 
     private func checkIdle() {
