@@ -23,6 +23,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     fileprivate var windowManager: WindowManager<SIApplication>?
     private var hotKeyManager: HotKeyManager<SIApplication>?
     private var accessibilityPermissionTimer: Timer?
+    private var controlRequestObserver: NSObjectProtocol?
 
     fileprivate var statusItem: NSStatusItem?
     @IBOutlet var statusItemMenu: NSMenu?
@@ -82,6 +83,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hotKeyManager = HotKeyManager(userConfiguration: UserConfiguration.shared)
 
         hotKeyManager?.setUpWithWindowManager(windowManager!, configuration: UserConfiguration.shared, appDelegate: self)
+        setUpControlInterface()
         monitorAccessibilityPermissionIfNeeded()
         ContextCapture.shared.windowSnapshotProvider = { [weak self] in
             return self?.windowManager?.contextWindowSnapshot() ?? []
@@ -125,6 +127,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         accessibilityPermissionTimer?.invalidate()
+        if let controlRequestObserver {
+            DistributedNotificationCenter.default().removeObserver(controlRequestObserver)
+        }
 
         defer {
             log.info("Amethyst terminating")
@@ -142,6 +147,64 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             log.error("Failed to encode window manager: \(error)")
         }
+    }
+
+    private func setUpControlInterface() {
+        controlRequestObserver = DistributedNotificationCenter.default().addObserver(
+            forName: AmethystControl.requestNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleControlRequest(notification)
+        }
+    }
+
+    private func handleControlRequest(_ notification: Notification) {
+        guard notification.userInfo?[AmethystControl.commandKey] as? String == AmethystControl.moveWindowCommand else {
+            return
+        }
+
+        let requestID = notification.userInfo?[AmethystControl.requestIDKey] as? String ?? ""
+        do {
+            let request = try WindowMoveControlRequest(userInfo: notification.userInfo)
+            guard let windowManager else {
+                respondToControlRequest(requestID: request.requestID, result: .failure(.windowManagerUnavailable))
+                return
+            }
+
+            windowManager.moveWindow(withCGID: request.windowID, toDesktop: request.desktop) { [weak self] result in
+                self?.respondToControlRequest(requestID: request.requestID, result: result)
+            }
+        } catch {
+            respondToControlRequest(
+                requestID: requestID,
+                result: .failure(.invalidRequest(error.localizedDescription))
+            )
+        }
+    }
+
+    private func respondToControlRequest(requestID: String, result: Result<String, WindowControlError>) {
+        let success: Bool
+        let message: String
+        switch result {
+        case let .success(value):
+            success = true
+            message = value
+        case let .failure(error):
+            success = false
+            message = error.localizedDescription
+        }
+
+        DistributedNotificationCenter.default().postNotificationName(
+            AmethystControl.responseNotification,
+            object: nil,
+            userInfo: [
+                AmethystControl.requestIDKey: requestID,
+                AmethystControl.successKey: NSNumber(value: success),
+                AmethystControl.messageKey: message,
+            ],
+            deliverImmediately: true
+        )
     }
 
     @IBAction func toggleStartAtLogin(_ sender: AnyObject) {

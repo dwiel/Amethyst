@@ -20,6 +20,41 @@ enum TrackingError: Error {
     case alreadyTracked
 }
 
+enum WindowControlError: LocalizedError {
+    case invalidRequest(String)
+    case windowManagerUnavailable
+    case windowNotFound(CGWindowID)
+    case windowHasNoScreen(CGWindowID)
+    case spacesUnavailable
+    case desktopOutOfRange(Int, Int)
+    case sourceSpaceUnknown(CGWindowID)
+    case focusFailed(CGWindowID)
+    case moveFailed(CGWindowID, Int)
+
+    var errorDescription: String? {
+        switch self {
+        case let .invalidRequest(message):
+            return message
+        case .windowManagerUnavailable:
+            return "window manager is unavailable"
+        case let .windowNotFound(windowID):
+            return "window \(windowID) is not tracked by Amethyst"
+        case let .windowHasNoScreen(windowID):
+            return "window \(windowID) is not on a screen"
+        case .spacesUnavailable:
+            return "macOS desktops are unavailable"
+        case let .desktopOutOfRange(desktop, count):
+            return "desktop \(desktop) does not exist; this Mac currently has \(count) desktops"
+        case let .sourceSpaceUnknown(windowID):
+            return "could not determine the current desktop for window \(windowID)"
+        case let .focusFailed(windowID):
+            return "could not focus window \(windowID) before moving it"
+        case let .moveFailed(windowID, desktop):
+            return "window \(windowID) did not reach desktop \(desktop)"
+        }
+    }
+}
+
 /**
  The tolerant interval between the click and the application of a mouse move from focus.
  
@@ -134,6 +169,172 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
         }
         RunLoop.main.add(timer, forMode: .common)
         activeWindowReconcileTimer = timer
+    }
+
+    func moveWindow(
+        withCGID windowID: CGWindowID,
+        toDesktop desktop: Int,
+        completion: @escaping (Result<String, WindowControlError>) -> Void
+    ) {
+        guard let spaces = CGSpacesInfo<Window>.spacesForAllScreens(includeOnlyUserSpaces: true) else {
+            completion(.failure(.spacesUnavailable))
+            return
+        }
+
+        let targetIndex = desktop - 1
+        guard spaces.indices.contains(targetIndex) else {
+            completion(.failure(.desktopOutOfRange(desktop, spaces.count)))
+            return
+        }
+        guard
+            let sourceSpaceID = CGWindowsInfo<Window>.windowSpace(windowID),
+            let sourceIndex = spaces.firstIndex(where: { $0.id == sourceSpaceID })
+        else {
+            completion(.failure(.sourceSpaceUnknown(windowID)))
+            return
+        }
+
+        if sourceIndex == targetIndex {
+            completion(.success("window \(windowID) is already on desktop \(desktop)"))
+            return
+        }
+
+        let originalIndex = CGSpacesInfo<Window>.currentFocusedSpace().flatMap { visibleSpace in
+            spaces.firstIndex(where: { $0.id == visibleSpace.id })
+        }
+        let targetSpaceID = spaces[targetIndex].id
+
+        let moveResolvedWindow: (Window) -> Void = { [weak self] window in
+            guard let self else {
+                completion(.failure(.windowManagerUnavailable))
+                return
+            }
+            guard window.screen() != nil else {
+                completion(.failure(.windowHasNoScreen(windowID)))
+                return
+            }
+            guard window.focus() else {
+                completion(.failure(.focusFailed(windowID)))
+                return
+            }
+
+            // Once the exact AX window is visible and focused, use the same
+            // drag-based transition as Amethyst's throw-space hotkey.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                guard let self else {
+                    completion(.failure(.windowManagerUnavailable))
+                    return
+                }
+
+                self.executeTransition(
+                    .moveWindowToSpaceAtIndex(
+                        window,
+                        spaceIndex: targetIndex,
+                        sourceSpaceIndex: sourceIndex
+                    )
+                )
+
+                // executeTransition returns to the source desktop after one second when
+                // follow-space-thrown-windows is disabled. Return to the desktop the user
+                // was on before the control request, then verify the durable Space ID.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.35) {
+                    if let originalIndex, originalIndex != sourceIndex {
+                        SISystemWideElement.switch(toSpace: UInt(originalIndex + 1))
+                    }
+
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) {
+                        let observedSpaceID = CGWindowsInfo<Window>.windowSpace(windowID)
+                        if observedSpaceID == targetSpaceID {
+                            completion(.success("moved window \(windowID) to desktop \(desktop)"))
+                        } else {
+                            completion(.failure(.moveFailed(windowID, desktop)))
+                        }
+                    }
+                }
+            }
+        }
+
+        if let window = controlWindow(withCGID: windowID) {
+            moveResolvedWindow(window)
+            return
+        }
+
+        // AX only exposes some applications' windows while their Desktop is visible.
+        // Switch to the source Desktop, then resolve the requested CG window ID there.
+        SISystemWideElement.switch(toSpace: UInt(sourceIndex + 1))
+        resolveControlWindow(withCGID: windowID, attemptsRemaining: 12) { window in
+            guard let window else {
+                if let originalIndex, originalIndex != sourceIndex {
+                    SISystemWideElement.switch(toSpace: UInt(originalIndex + 1))
+                }
+                completion(.failure(.windowNotFound(windowID)))
+                return
+            }
+            moveResolvedWindow(window)
+        }
+    }
+
+    private func resolveControlWindow(
+        withCGID windowID: CGWindowID,
+        attemptsRemaining: Int,
+        completion: @escaping (Window?) -> Void
+    ) {
+        if let window = controlWindow(withCGID: windowID) {
+            completion(window)
+            return
+        }
+        guard attemptsRemaining > 0 else {
+            completion(nil)
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else {
+                completion(nil)
+                return
+            }
+            self.resolveControlWindow(
+                withCGID: windowID,
+                attemptsRemaining: attemptsRemaining - 1,
+                completion: completion
+            )
+        }
+    }
+
+    private func controlWindow(withCGID windowID: CGWindowID) -> Window? {
+        if let trackedWindow = windows.windows.first(where: { $0.cgID() == windowID }) {
+            return trackedWindow
+        }
+
+        let descriptions = CGWindowsInfo<Window>(
+            options: .optionIncludingWindow,
+            windowID: windowID
+        )?.descriptions
+        let ownerPID = descriptions?.first(where: { description in
+            guard let number = description[kCGWindowNumber as String] as? NSNumber else {
+                return false
+            }
+            return number.uint32Value == windowID
+        }).flatMap { description in
+            (description[kCGWindowOwnerPID as String] as? NSNumber).map { pid_t($0.int32Value) }
+        }
+
+        guard let ownerPID else {
+            return nil
+        }
+
+        if let application = applications[ownerPID] {
+            application.dropWindowsCache()
+            if let window = application.windows().first(where: { $0.cgID() == windowID }) {
+                return window
+            }
+        }
+
+        guard let runningApplication = NSRunningApplication(processIdentifier: ownerPID) else {
+            return nil
+        }
+        let application = Application(runningApplication: runningApplication)
+        return application.windows().first(where: { $0.cgID() == windowID })
     }
 
     /// Detect when the live on-screen active set drifts from the last reflow without

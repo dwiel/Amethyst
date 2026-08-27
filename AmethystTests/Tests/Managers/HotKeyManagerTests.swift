@@ -20,5 +20,38 @@ class HotKeyManagerTests: QuickSpec {
                 expect(screenCommands.count).to(equal(7))
             }
         }
+
+        describe("WindowMoveControlRequest") {
+            it("accepts an exact window and bounded desktop") {
+                let request = try? WindowMoveControlRequest(userInfo: [
+                    AmethystControl.requestIDKey: "request-1",
+                    AmethystControl.windowIDKey: NSNumber(value: UInt32(60)),
+                    AmethystControl.desktopKey: NSNumber(value: 2),
+                ])
+
+                expect(request?.requestID).to(equal("request-1"))
+                expect(request?.windowID).to(equal(CGWindowID(60)))
+                expect(request?.desktop).to(equal(2))
+            }
+
+            it("rejects an out-of-range desktop") {
+                expect {
+                    try WindowMoveControlRequest(userInfo: [
+                        AmethystControl.requestIDKey: "request-2",
+                        AmethystControl.windowIDKey: NSNumber(value: UInt32(60)),
+                        AmethystControl.desktopKey: NSNumber(value: 20),
+                    ])
+                }.to(throwError(WindowMoveControlRequestError.invalidDesktop))
+            }
+
+            it("rejects a missing window id") {
+                expect {
+                    try WindowMoveControlRequest(userInfo: [
+                        AmethystControl.requestIDKey: "request-3",
+                        AmethystControl.desktopKey: NSNumber(value: 2),
+                    ])
+                }.to(throwError(WindowMoveControlRequestError.invalidWindowID))
+            }
+        }
     }
 }

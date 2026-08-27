@@ -99,6 +99,24 @@ if let wins = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
 }'
 ```
 
+## Local control CLI
+
+The installed binary exposes one constrained control hook to the already-running,
+Accessibility-approved Amethyst process:
+
+```bash
+/Applications/Amethyst.app/Contents/MacOS/Amethyst control move-window \
+  --window-id 60 --desktop 2
+```
+
+`--window-id` is the CG window ID printed by `window-layout` or
+`Amethyst debug windows`. `--desktop` is the one-based Desktop number shown by
+Mission Control, not the durable `ManagedSpaceID` recorded by `window-layout`.
+The command accepts only an exact window ID and Desktop 1–19, waits for an
+acknowledgement, and verifies the resulting Space before reporting success. It
+does not expose arbitrary keystrokes, shell commands, app activation, or a
+general remote-control channel.
+
 ## Known bugs fixed on this fork (context for agents)
 
 1. **Stale Space skip** — accessibility/space race used to drop reflows forever; `ScreenManager.reflow` resyncs Space and re-queues.
