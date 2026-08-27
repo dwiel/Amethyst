@@ -13,6 +13,20 @@ import RxSwift
 import Silica
 import SwiftyJSON
 
+@_silgen_name("SLSMainConnectionID")
+private func mainSLSConnectionID() -> Int32
+
+@_silgen_name("SLSSpaceSetCompatID") @discardableResult
+private func setSpaceCompatID(_ connection: Int32, _ spaceID: UInt64, _ workspace: Int32) -> CGError
+
+@_silgen_name("SLSSetWindowListWorkspace") @discardableResult
+private func setWindowListWorkspace(
+    _ connection: Int32,
+    _ windowIDs: UnsafeMutablePointer<CGWindowID>,
+    _ windowCount: Int32,
+    _ workspace: Int32
+) -> CGError
+
 enum TrackingError: Error {
     case unreliableFloating
     case unknownScreen
@@ -24,12 +38,12 @@ enum WindowControlError: LocalizedError {
     case invalidRequest(String)
     case windowManagerUnavailable
     case windowNotFound(CGWindowID)
-    case windowHasNoScreen(CGWindowID)
     case spacesUnavailable
     case desktopOutOfRange(Int, Int)
     case sourceSpaceUnknown(CGWindowID)
-    case focusFailed(CGWindowID)
+    case backgroundMoveUnavailable
     case moveFailed(CGWindowID, Int)
+    case windowsOnDifferentSpaces(CGWindowID, CGWindowID)
 
     var errorDescription: String? {
         switch self {
@@ -39,18 +53,18 @@ enum WindowControlError: LocalizedError {
             return "window manager is unavailable"
         case let .windowNotFound(windowID):
             return "window \(windowID) is not tracked by Amethyst"
-        case let .windowHasNoScreen(windowID):
-            return "window \(windowID) is not on a screen"
         case .spacesUnavailable:
             return "macOS desktops are unavailable"
         case let .desktopOutOfRange(desktop, count):
             return "desktop \(desktop) does not exist; this Mac currently has \(count) desktops"
         case let .sourceSpaceUnknown(windowID):
             return "could not determine the current desktop for window \(windowID)"
-        case let .focusFailed(windowID):
-            return "could not focus window \(windowID) before moving it"
+        case .backgroundMoveUnavailable:
+            return "macOS 15 blocks background moves of other apps' windows; no desktop was switched"
         case let .moveFailed(windowID, desktop):
             return "window \(windowID) did not reach desktop \(desktop)"
+        case let .windowsOnDifferentSpaces(windowID, otherWindowID):
+            return "windows \(windowID) and \(otherWindowID) are not on the same desktop"
         }
     }
 }
@@ -186,10 +200,11 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
             completion(.failure(.desktopOutOfRange(desktop, spaces.count)))
             return
         }
-        guard
-            let sourceSpaceID = CGWindowsInfo<Window>.windowSpace(windowID),
-            let sourceIndex = spaces.firstIndex(where: { $0.id == sourceSpaceID })
-        else {
+        guard let sourceSpaceID = CGWindowsInfo<Window>.windowSpace(windowID) else {
+            completion(.failure(.sourceSpaceUnknown(windowID)))
+            return
+        }
+        guard let sourceIndex = spaces.firstIndex(where: { $0.id == sourceSpaceID }) else {
             completion(.failure(.sourceSpaceUnknown(windowID)))
             return
         }
@@ -199,102 +214,96 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
             return
         }
 
-        let originalIndex = CGSpacesInfo<Window>.currentFocusedSpace().flatMap { visibleSpace in
-            spaces.firstIndex(where: { $0.id == visibleSpace.id })
+        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 15 {
+            completion(.failure(.backgroundMoveUnavailable))
+            return
         }
-        let targetSpaceID = spaces[targetIndex].id
 
-        let moveResolvedWindow: (Window) -> Void = { [weak self] window in
+        let targetSpaceID = spaces[targetIndex].id
+        let connection = mainSLSConnectionID()
+
+        if #available(macOS 14.5, *) {
+            // Since macOS 14.5, moving a window without visiting either Space
+            // requires temporarily assigning the target Space a workspace ID.
+            // This is the same narrow SkyLight operation used by Hammerspoon.
+            let temporaryWorkspace: Int32 = 0x79616265
+            var mutableWindowID = windowID
+            let assignResult = setSpaceCompatID(connection, UInt64(targetSpaceID), temporaryWorkspace)
+            let moveResult = setWindowListWorkspace(connection, &mutableWindowID, 1, temporaryWorkspace)
+            let resetResult = setSpaceCompatID(connection, UInt64(targetSpaceID), 0)
+            log.debug(
+                "Background Space move: window=\(windowID) target=\(targetSpaceID) " +
+                    "connection=\(connection) results=\(assignResult.rawValue),\(moveResult.rawValue),\(resetResult.rawValue)"
+            )
+        } else {
+            let windowIDs = CGWindowsInfo<Window>.windowIDsArray(windowID)
+            CGSMoveWindowsToManagedSpace(connection, windowIDs, targetSpaceID)
+        }
+
+        verifyBackgroundMove(
+            windowID: windowID,
+            targetSpaceID: targetSpaceID,
+            desktop: desktop,
+            attemptsRemaining: 12,
+            completion: completion
+        )
+    }
+
+    func swapWindows(
+        withCGID windowID: CGWindowID,
+        otherWindowID: CGWindowID,
+        completion: @escaping (Result<String, WindowControlError>) -> Void
+    ) {
+        guard let window = controlWindow(withCGID: windowID) else {
+            completion(.failure(.windowNotFound(windowID)))
+            return
+        }
+        guard let otherWindow = controlWindow(withCGID: otherWindowID) else {
+            completion(.failure(.windowNotFound(otherWindowID)))
+            return
+        }
+        guard
+            let windowSpace = CGWindowsInfo<Window>.windowSpace(windowID),
+            let otherWindowSpace = CGWindowsInfo<Window>.windowSpace(otherWindowID),
+            windowSpace == otherWindowSpace
+        else {
+            completion(.failure(.windowsOnDifferentSpaces(windowID, otherWindowID)))
+            return
+        }
+
+        executeTransition(.switchWindows(window, otherWindow))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) {
+            completion(.success("swapped windows \(windowID) and \(otherWindowID)"))
+        }
+    }
+
+    private func verifyBackgroundMove(
+        windowID: CGWindowID,
+        targetSpaceID: CGSSpaceID,
+        desktop: Int,
+        attemptsRemaining: Int,
+        completion: @escaping (Result<String, WindowControlError>) -> Void
+    ) {
+        if CGWindowsInfo<Window>.windowSpace(windowID) == targetSpaceID {
+            windows.regenerateActiveIDCache()
+            markAllScreensForReflow()
+            completion(.success("moved window \(windowID) to desktop \(desktop) without switching desktops"))
+            return
+        }
+        guard attemptsRemaining > 0 else {
+            completion(.failure(.moveFailed(windowID, desktop)))
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             guard let self else {
                 completion(.failure(.windowManagerUnavailable))
                 return
             }
-            guard window.screen() != nil else {
-                completion(.failure(.windowHasNoScreen(windowID)))
-                return
-            }
-            guard window.focus() else {
-                completion(.failure(.focusFailed(windowID)))
-                return
-            }
-
-            // Once the exact AX window is visible and focused, use the same
-            // drag-based transition as Amethyst's throw-space hotkey.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                guard let self else {
-                    completion(.failure(.windowManagerUnavailable))
-                    return
-                }
-
-                self.executeTransition(
-                    .moveWindowToSpaceAtIndex(
-                        window,
-                        spaceIndex: targetIndex,
-                        sourceSpaceIndex: sourceIndex
-                    )
-                )
-
-                // executeTransition returns to the source desktop after one second when
-                // follow-space-thrown-windows is disabled. Return to the desktop the user
-                // was on before the control request, then verify the durable Space ID.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.35) {
-                    if let originalIndex, originalIndex != sourceIndex {
-                        SISystemWideElement.switch(toSpace: UInt(originalIndex + 1))
-                    }
-
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) {
-                        let observedSpaceID = CGWindowsInfo<Window>.windowSpace(windowID)
-                        if observedSpaceID == targetSpaceID {
-                            completion(.success("moved window \(windowID) to desktop \(desktop)"))
-                        } else {
-                            completion(.failure(.moveFailed(windowID, desktop)))
-                        }
-                    }
-                }
-            }
-        }
-
-        if let window = controlWindow(withCGID: windowID) {
-            moveResolvedWindow(window)
-            return
-        }
-
-        // AX only exposes some applications' windows while their Desktop is visible.
-        // Switch to the source Desktop, then resolve the requested CG window ID there.
-        SISystemWideElement.switch(toSpace: UInt(sourceIndex + 1))
-        resolveControlWindow(withCGID: windowID, attemptsRemaining: 12) { window in
-            guard let window else {
-                if let originalIndex, originalIndex != sourceIndex {
-                    SISystemWideElement.switch(toSpace: UInt(originalIndex + 1))
-                }
-                completion(.failure(.windowNotFound(windowID)))
-                return
-            }
-            moveResolvedWindow(window)
-        }
-    }
-
-    private func resolveControlWindow(
-        withCGID windowID: CGWindowID,
-        attemptsRemaining: Int,
-        completion: @escaping (Window?) -> Void
-    ) {
-        if let window = controlWindow(withCGID: windowID) {
-            completion(window)
-            return
-        }
-        guard attemptsRemaining > 0 else {
-            completion(nil)
-            return
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            guard let self else {
-                completion(nil)
-                return
-            }
-            self.resolveControlWindow(
-                withCGID: windowID,
+            self.verifyBackgroundMove(
+                windowID: windowID,
+                targetSpaceID: targetSpaceID,
+                desktop: desktop,
                 attemptsRemaining: attemptsRemaining - 1,
                 completion: completion
             )

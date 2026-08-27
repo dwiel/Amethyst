@@ -160,20 +160,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleControlRequest(_ notification: Notification) {
-        guard notification.userInfo?[AmethystControl.commandKey] as? String == AmethystControl.moveWindowCommand else {
+        guard let command = notification.userInfo?[AmethystControl.commandKey] as? String else {
             return
         }
 
         let requestID = notification.userInfo?[AmethystControl.requestIDKey] as? String ?? ""
         do {
-            let request = try WindowMoveControlRequest(userInfo: notification.userInfo)
             guard let windowManager else {
-                respondToControlRequest(requestID: request.requestID, result: .failure(.windowManagerUnavailable))
+                respondToControlRequest(requestID: requestID, result: .failure(.windowManagerUnavailable))
                 return
             }
 
-            windowManager.moveWindow(withCGID: request.windowID, toDesktop: request.desktop) { [weak self] result in
-                self?.respondToControlRequest(requestID: request.requestID, result: result)
+            switch command {
+            case AmethystControl.moveWindowCommand:
+                let request = try WindowMoveControlRequest(userInfo: notification.userInfo)
+                windowManager.moveWindow(withCGID: request.windowID, toDesktop: request.desktop) { [weak self] result in
+                    self?.respondToControlRequest(requestID: request.requestID, result: result)
+                }
+            case AmethystControl.swapWindowsCommand:
+                let request = try WindowSwapControlRequest(userInfo: notification.userInfo)
+                windowManager.swapWindows(
+                    withCGID: request.windowID,
+                    otherWindowID: request.otherWindowID
+                ) { [weak self] result in
+                    self?.respondToControlRequest(requestID: request.requestID, result: result)
+                }
+            default:
+                return
             }
         } catch {
             respondToControlRequest(

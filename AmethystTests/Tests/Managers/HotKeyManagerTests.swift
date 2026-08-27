@@ -53,5 +53,28 @@ class HotKeyManagerTests: QuickSpec {
                 }.to(throwError(WindowMoveControlRequestError.invalidWindowID))
             }
         }
+
+        describe("WindowSwapControlRequest") {
+            it("accepts two distinct exact window IDs") {
+                let request = try? WindowSwapControlRequest(userInfo: [
+                    AmethystControl.requestIDKey: "request-4",
+                    AmethystControl.windowIDKey: NSNumber(value: UInt32(60)),
+                    AmethystControl.otherWindowIDKey: NSNumber(value: UInt32(99)),
+                ])
+
+                expect(request?.windowID).to(equal(CGWindowID(60)))
+                expect(request?.otherWindowID).to(equal(CGWindowID(99)))
+            }
+
+            it("rejects identical window IDs") {
+                expect {
+                    try WindowSwapControlRequest(userInfo: [
+                        AmethystControl.requestIDKey: "request-5",
+                        AmethystControl.windowIDKey: NSNumber(value: UInt32(60)),
+                        AmethystControl.otherWindowIDKey: NSNumber(value: UInt32(60)),
+                    ])
+                }.to(throwError(WindowSwapControlRequestError.identicalWindowIDs))
+            }
+        }
     }
 }

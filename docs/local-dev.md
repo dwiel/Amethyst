@@ -107,15 +107,22 @@ Accessibility-approved Amethyst process:
 ```bash
 /Applications/Amethyst.app/Contents/MacOS/Amethyst control move-window \
   --window-id 60 --desktop 2
+
+amethyst control swap-windows --window-id 60 --other-window-id 99
 ```
 
 `--window-id` is the CG window ID printed by `window-layout` or
 `Amethyst debug windows`. `--desktop` is the one-based Desktop number shown by
 Mission Control, not the durable `ManagedSpaceID` recorded by `window-layout`.
-The command accepts only an exact window ID and Desktop 1–19, waits for an
-acknowledgement, and verifies the resulting Space before reporting success. It
-does not expose arbitrary keystrokes, shell commands, app activation, or a
-general remote-control channel.
+The commands accept only exact window IDs (and Desktop 1–19 for a move), wait for
+an acknowledgement, and verify moves before reporting success. `move-window`
+uses the direct Space IDs and never activates the app or visits the source or
+destination Desktop. It fails instead of falling back to an interactive Desktop
+switch. macOS 15 blocks this operation for windows owned by other apps, so the
+command reports that limitation immediately without moving or focusing anything.
+`swap-windows` only accepts windows already on the same Desktop and swaps their
+tiling order. Neither command exposes arbitrary keystrokes, shell commands, app
+activation, or a general remote-control channel.
 
 ## Known bugs fixed on this fork (context for agents)
 
