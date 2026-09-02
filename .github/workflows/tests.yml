@@ -2,8 +2,12 @@ name: Tests
 
 on:
   push:
-    branches: [ development ]
+    # `master` is this fork's only working branch (docs/local-dev.md: one working
+    # line, no feature branches), so without it here the workflow never ran --
+    # 0 Actions runs since it was added. `development` stays for upstream parity.
+    branches: [ master, development ]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
