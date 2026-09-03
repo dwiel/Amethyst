@@ -19,6 +19,7 @@ enum AmethystControl {
     static let windowIDKey = "window_id"
     static let otherWindowIDKey = "other_window_id"
     static let desktopKey = "desktop"
+    static let visitKey = "visit"
     static let successKey = "success"
     static let messageKey = "message"
 
@@ -49,6 +50,8 @@ struct WindowMoveControlRequest: Equatable {
     let requestID: String
     let windowID: CGWindowID
     let desktop: Int
+    /// Throw the window the way the hotkey does: briefly visit its desktop, grab it, switch, return.
+    let visit: Bool
 
     init(userInfo: [AnyHashable: Any]?) throws {
         guard let requestID = userInfo?[AmethystControl.requestIDKey] as? String, !requestID.isEmpty else {
@@ -68,6 +71,7 @@ struct WindowMoveControlRequest: Equatable {
         self.requestID = requestID
         self.windowID = CGWindowID(rawWindowID)
         self.desktop = desktop
+        self.visit = (userInfo?[AmethystControl.visitKey] as? NSNumber)?.boolValue ?? false
     }
 }
 
@@ -138,7 +142,7 @@ struct Control: ParsableCommand {
 struct MoveWindow: ParsableCommand {
     static var configuration: CommandConfiguration = CommandConfiguration(
         commandName: "move-window",
-        abstract: "Move an exact window to a numbered macOS desktop without switching desktops."
+        abstract: "Move an exact window to a numbered macOS desktop. Background moves are blocked on macOS 15; pass --visit to throw it the way the hotkey does (briefly switches desktops, then returns)."
     )
 
     @Option(help: "CG window ID shown by `Amethyst debug windows` or `window-layout`.")
@@ -146,6 +150,9 @@ struct MoveWindow: ParsableCommand {
 
     @Option(help: "One-based macOS desktop number.")
     var desktop: Int
+
+    @Flag(help: "Visit the window's desktop, focus it, throw it with the Mission Control hotkey drag, and return to the desktop you started on. Steals focus for about two seconds.")
+    var visit = false
 
     @Option(help: "Seconds to wait for the running Amethyst process.")
     var timeout: Double = 8
@@ -168,6 +175,7 @@ struct MoveWindow: ParsableCommand {
                 AmethystControl.commandKey: AmethystControl.moveWindowCommand,
                 AmethystControl.windowIDKey: NSNumber(value: windowID),
                 AmethystControl.desktopKey: NSNumber(value: desktop),
+                AmethystControl.visitKey: NSNumber(value: visit),
             ],
             timeout: timeout
         )

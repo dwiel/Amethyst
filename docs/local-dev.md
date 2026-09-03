@@ -120,6 +120,15 @@ uses the direct Space IDs and never activates the app or visits the source or
 destination Desktop. It fails instead of falling back to an interactive Desktop
 switch. macOS 15 blocks this operation for windows owned by other apps, so the
 command reports that limitation immediately without moving or focusing anything.
+
+`move-window --visit` (≥0.24.3.15) is the macOS 15 escape hatch. It performs
+the same throw the hotkey does: switch to the window's Desktop, focus it, let
+Silica mouse-down the title bar and fire the Mission Control "switch to
+Desktop N" shortcut so the Space slides out from under the held window, then
+switch back to the Desktop the user started on and restore the cursor. It
+steals focus for about two seconds per window, so use it only when the user
+asked for windows to be put back (post-reboot restore), never as a background
+tidy-up. Success reply: `threw window N to desktop D and returned to desktop S`.
 `swap-windows` only accepts windows already on the same Desktop and swaps their
 tiling order. Neither command exposes arbitrary keystrokes, shell commands, app
 activation, or a general remote-control channel.

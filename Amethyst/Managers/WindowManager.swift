@@ -42,6 +42,7 @@ enum WindowControlError: LocalizedError {
     case desktopOutOfRange(Int, Int)
     case sourceSpaceUnknown(CGWindowID)
     case backgroundMoveUnavailable
+    case visitFailed(CGWindowID, String)
     case moveFailed(CGWindowID, Int)
     case windowsOnDifferentSpaces(CGWindowID, CGWindowID)
 
@@ -60,7 +61,9 @@ enum WindowControlError: LocalizedError {
         case let .sourceSpaceUnknown(windowID):
             return "could not determine the current desktop for window \(windowID)"
         case .backgroundMoveUnavailable:
-            return "macOS 15 blocks background moves of other apps' windows; no desktop was switched"
+            return "macOS 15 blocks background moves of other apps' windows; no desktop was switched. Rerun with --visit to throw it the way the hotkey does (briefly switches desktops)"
+        case let .visitFailed(windowID, reason):
+            return "could not throw window \(windowID): \(reason)"
         case let .moveFailed(windowID, desktop):
             return "window \(windowID) did not reach desktop \(desktop)"
         case let .windowsOnDifferentSpaces(windowID, otherWindowID):
@@ -188,6 +191,7 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
     func moveWindow(
         withCGID windowID: CGWindowID,
         toDesktop desktop: Int,
+        visit: Bool = false,
         completion: @escaping (Result<String, WindowControlError>) -> Void
     ) {
         guard let spaces = CGSpacesInfo<Window>.spacesForAllScreens(includeOnlyUserSpaces: true) else {
@@ -214,12 +218,26 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
             return
         }
 
+        let targetSpaceID = spaces[targetIndex].id
+
+        if visit {
+            moveWindowByVisiting(
+                windowID: windowID,
+                sourceIndex: sourceIndex,
+                targetIndex: targetIndex,
+                targetSpaceID: targetSpaceID,
+                spaces: spaces,
+                desktop: desktop,
+                completion: completion
+            )
+            return
+        }
+
         if ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 15 {
             completion(.failure(.backgroundMoveUnavailable))
             return
         }
 
-        let targetSpaceID = spaces[targetIndex].id
         let connection = mainSLSConnectionID()
 
         if #available(macOS 14.5, *) {
@@ -245,8 +263,100 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
             targetSpaceID: targetSpaceID,
             desktop: desktop,
             attemptsRemaining: 12,
+            successMessage: "moved window \(windowID) to desktop \(desktop) without switching desktops",
             completion: completion
         )
+    }
+
+    /// macOS 15 refuses to relocate another app's window while it is off-screen, but the hotkey
+    /// throw still works: Silica grabs the window's title bar with a synthetic mouse-down and fires
+    /// the Mission Control "switch to Desktop N" shortcut so the Space slides out from under it.
+    /// That needs the window visible and focused, so this path visits the source desktop, throws,
+    /// and returns to the desktop the user started on. Costs roughly two seconds of stolen focus.
+    private func moveWindowByVisiting(
+        windowID: CGWindowID,
+        sourceIndex: Int,
+        targetIndex: Int,
+        targetSpaceID: CGSSpaceID,
+        spaces: [Space],
+        desktop: Int,
+        completion: @escaping (Result<String, WindowControlError>) -> Void
+    ) {
+        guard let originalSpace = CGSpacesInfo<Window>.currentFocusedSpace() else {
+            completion(.failure(.spacesUnavailable))
+            return
+        }
+        let originalIndex = spaces.firstIndex(where: { $0.id == originalSpace.id }) ?? sourceIndex
+        let originalCursor = CGEvent(source: nil)?.location
+
+        log.info("Visiting move: window=\(windowID) source=\(sourceIndex + 1) target=\(desktop) return=\(originalIndex + 1)")
+
+        let returnHome: () -> Void = {
+            if let current = CGSpacesInfo<Window>.currentFocusedSpace(), current.id != originalSpace.id {
+                SISystemWideElement.switch(toSpace: UInt(originalIndex + 1))
+            }
+            if let originalCursor {
+                CGWarpMouseCursorPosition(originalCursor)
+            }
+        }
+
+        let throwWindow: () -> Void = { [weak self] in
+            guard let self else {
+                completion(.failure(.windowManagerUnavailable))
+                return
+            }
+            guard let window = self.controlWindow(withCGID: windowID) else {
+                returnHome()
+                completion(.failure(.windowNotFound(windowID)))
+                return
+            }
+            guard let screen = window.screen() else {
+                returnHome()
+                completion(.failure(.visitFailed(windowID, "window has no screen after visiting desktop \(sourceIndex + 1)")))
+                return
+            }
+            window.focus()
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                guard let self else {
+                    completion(.failure(.windowManagerUnavailable))
+                    return
+                }
+                // Same bookkeeping as the hotkey throw; the actual move is the Silica drag.
+                self.distributeEventToScreen(screen, change: .remove(window: window))
+                self.markScreenForReflow(screen)
+                if let targetScreen = CGSpacesInfo<Window>.screenForSpace(space: spaces[targetIndex]) {
+                    self.eventQueue.append(PendingEvent(screen: targetScreen, event: .add(window: window)))
+                }
+                window.move(toSpaceAtIndex: UInt(targetIndex + 1))
+
+                // Silica: mouse-down, 0.05s, hotkey, 0.4s, mouse-up. Wait for the transition to settle.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    returnHome()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                        guard let self else {
+                            completion(.failure(.windowManagerUnavailable))
+                            return
+                        }
+                        self.verifyBackgroundMove(
+                            windowID: windowID,
+                            targetSpaceID: targetSpaceID,
+                            desktop: desktop,
+                            attemptsRemaining: 12,
+                            successMessage: "threw window \(windowID) to desktop \(desktop) and returned to desktop \(originalIndex + 1)",
+                            completion: completion
+                        )
+                    }
+                }
+            }
+        }
+
+        if originalIndex == sourceIndex {
+            throwWindow()
+        } else {
+            SISystemWideElement.switch(toSpace: UInt(sourceIndex + 1))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: throwWindow)
+        }
     }
 
     func swapWindows(
@@ -282,12 +392,13 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
         targetSpaceID: CGSSpaceID,
         desktop: Int,
         attemptsRemaining: Int,
+        successMessage: String,
         completion: @escaping (Result<String, WindowControlError>) -> Void
     ) {
         if CGWindowsInfo<Window>.windowSpace(windowID) == targetSpaceID {
             windows.regenerateActiveIDCache()
             markAllScreensForReflow()
-            completion(.success("moved window \(windowID) to desktop \(desktop) without switching desktops"))
+            completion(.success(successMessage))
             return
         }
         guard attemptsRemaining > 0 else {
@@ -305,6 +416,7 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
                 targetSpaceID: targetSpaceID,
                 desktop: desktop,
                 attemptsRemaining: attemptsRemaining - 1,
+                successMessage: successMessage,
                 completion: completion
             )
         }

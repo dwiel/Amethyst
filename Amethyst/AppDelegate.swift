@@ -174,7 +174,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             switch command {
             case AmethystControl.moveWindowCommand:
                 let request = try WindowMoveControlRequest(userInfo: notification.userInfo)
-                windowManager.moveWindow(withCGID: request.windowID, toDesktop: request.desktop) { [weak self] result in
+                windowManager.moveWindow(
+                    withCGID: request.windowID,
+                    toDesktop: request.desktop,
+                    visit: request.visit
+                ) { [weak self] result in
                     self?.respondToControlRequest(requestID: request.requestID, result: result)
                 }
             case AmethystControl.swapWindowsCommand:
