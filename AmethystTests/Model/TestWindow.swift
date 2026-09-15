@@ -22,6 +22,7 @@ final class TestWindow: WindowType {
     private var _frame: CGRect = .zero
     var isFocusedValue = false
     var onSetFrame: (() -> Void)?
+    var frameTransform: ((CGRect) -> CGRect)?
     private(set) var assignedFrames: [CGRect] = []
 
     static func currentlyFocused() -> Self? {
@@ -49,7 +50,7 @@ final class TestWindow: WindowType {
     }
 
     func setFrame(_ frame: CGRect, withThreshold threshold: CGSize) {
-        _frame = frame
+        _frame = frameTransform?(frame) ?? frame
         assignedFrames.append(frame)
         onSetFrame?()
     }

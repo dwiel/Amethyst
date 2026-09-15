@@ -171,6 +171,38 @@ tests); Release build signed with the existing local identity; installed
 0.24.3.16 / 129.16. Launch at 12:29:53 logged current reflows on both displays
 and native context capture. Backup: `artifacts/Amethyst-0.24.3.15-before-reflow-fix-20260915.app`.
 
+## Ignored frames after an out-and-back display throw (0.24.3.17, 2026-09-15)
+
+The 0.24.3.16 log captured Chrome window 122671 going to the other display at
+13:46:27 and returning at 13:46:29. On return, Amethyst requested origin
+`(1920, 1092)` but observed `(0, 25)` and still recorded completion. The active
+window IDs were correct, so membership recovery never retried it. A later
+Space switch at 13:46:54 applied the same target successfully. The log proves
+the ignored write, but does not expose why Chrome/macOS ignored it.
+
+- Keep the expected position and size from each current layout, then re-read
+  the frames on the existing one-second reconcile pass, after the drag/resize
+  and recent-reflow guards. This also catches a frame overwritten shortly
+  after its assignment.
+- Retry a fresh layout at most three times per reflow request. New requests
+  discard old verification and reset the budget; changed Spaces/displays,
+  inactive or floating windows, and disabled tiling cannot replay old targets.
+- Verify the focused window's on-screen-adjusted position and desired size.
+  A failed shrink can look like a minimum size, so persistent app constraints
+  reach the retry limit rather than running forever.
+- Logs: `Reflow retry for unapplied frames` and `Reflow frame retry limit`.
+
+Regression coverage adds ignored return moves with unchanged membership,
+delayed acceptance, a frame overwritten after completion, bounded minimum-size
+retries, and obsolete layout/Space verification.
+
+Validated: all 169 unit tests passed. Release 0.24.3.17 / 129.17 was signed
+with the existing identity and installed; launch at 13:53:43 completed reflows
+on both displays. The running executable's inode matches the installed app,
+and `attention doctor` reports healthy native capture. The ignored write was
+reproduced with fake windows in tests; no live display throw was driven during
+verification. Backup: `artifacts/Amethyst-0.24.3.16-before-frame-retry-20260915.app`.
+
 ## Commit / push
 
 ```bash

@@ -52,6 +52,8 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
     private let reflowOperationQueue = OperationQueue()
     private var reflowGeneration: UInt = 0
     private var reflowQueued = false
+    private var frameRetryCount = 0
+    private var pendingFrameVerification: (() -> [Window.WindowID])?
     private(set) var lastReflowWindowIDs: Set<Window.WindowID>?
     private(set) var lastReflowSpace: Space?
     private var lastReflowScreenFrame: CGRect?
@@ -216,6 +218,33 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
     }
 
     func setNeedsReflow() {
+        frameRetryCount = 0
+        queueReflow()
+    }
+
+    /// Called by the once-per-second reconcile pass after its drag/resize guards.
+    /// Re-read frames after the display transition has had time to settle.
+    @discardableResult
+    func retryUnappliedFramesIfNeeded() -> Bool {
+        guard !hasPendingReflow, let verify = pendingFrameVerification else { return false }
+        let mismatchedIDs = verify()
+        pendingFrameVerification = nil
+        guard !mismatchedIDs.isEmpty else { return false }
+        guard frameRetryCount < 3 else {
+            log.warning("Reflow frame retry limit: screen=\(screen?.screenID() ?? "unknown") windows=\(mismatchedIDs)")
+            return false
+        }
+        frameRetryCount += 1
+        log.debug(
+            "Reflow retry for unapplied frames: screen=\(screen?.screenID() ?? "unknown") " +
+                "attempt=\(frameRetryCount) windows=\(mismatchedIDs)"
+        )
+        queueReflow()
+        return true
+    }
+
+    private func queueReflow() {
+        pendingFrameVerification = nil
         reflowGeneration &+= 1
         let cancelledOperationCount = reflowOperationQueue.operationCount
         reflowOperationQueue.cancelAllOperations()
@@ -364,6 +393,10 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
                 self.lastReflowSpace = currentSpace
                 self.lastReflowScreenFrame = screenFrame
                 self.lastReflowAdjustedFrame = adjustedFrame
+                self.pendingFrameVerification = {
+                    guard isCurrent() else { return [] }
+                    return frameAssignments.filter { $0.needsFrameRetry }.map { $0.frameAssignment.window.id }
+                }
                 log.debug(
                     "Reflow completed: screen=\(screenID) space=\(currentSpace.uuid) " +
                         "layout=\(layout.layoutKey) assignments=\(frameAssignments.count) " +

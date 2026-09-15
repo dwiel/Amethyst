@@ -488,6 +488,9 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
 
             let activeIDs = Set(windows.activeWindows(onScreen: screen).map { $0.id() })
             guard screenManager.needsReflow(windowIDs: activeIDs, in: currentSpace) else {
+                // Same membership does not prove the moves/resizes took effect.
+                // Chrome can ignore AX writes while crossing displays.
+                screenManager.retryUnappliedFramesIfNeeded()
                 continue
             }
 

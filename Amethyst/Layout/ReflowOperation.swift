@@ -93,23 +93,33 @@ struct WindowSet<Window: WindowType> {
         return isWindowWithIDFloating(window.id)
     }
 
-    func perform(frameAssignment: FrameAssignment<Window>) {
+    @discardableResult
+    func perform(frameAssignment: FrameAssignment<Window>) -> CGRect? {
         guard let window = windowForID(frameAssignment.window.id) else {
             log.warning("Frame assignment skipped: window=\(frameAssignment.window.id) is no longer tracked")
-            return
+            return nil
         }
 
         guard isWindowWithIDActive(frameAssignment.window.id) else {
             log.debug("Frame assignment skipped: window=\(frameAssignment.window.id) is inactive")
-            return
+            return nil
         }
 
         guard !isWindowWithIDFloating(frameAssignment.window.id) else {
             log.debug("Frame assignment skipped: window=\(frameAssignment.window.id) is floating")
-            return
+            return nil
         }
 
-        frameAssignment.perform(withWindow: window)
+        return frameAssignment.perform(withWindow: window)
+    }
+
+    func needsFrameRetry(windowID: Window.WindowID, expected: CGRect) -> Bool {
+        guard isWindowWithIDActive(windowID), !isWindowWithIDFloating(windowID),
+              let window = windowForID(windowID) else { return false }
+        let observed = window.frame()
+        return observed.isNull || abs(observed.minX - expected.minX) > 1 ||
+            abs(observed.minY - expected.minY) > 1 || abs(observed.width - expected.width) > 1 ||
+            abs(observed.height - expected.height) > 1
     }
 }
 
@@ -118,6 +128,12 @@ class FrameAssignmentOperation<Window: WindowType>: Operation {
     let windowSet: WindowSet<Window>
     /// Evaluated on the main thread, immediately before touching the window.
     var isReflowCurrent: () -> Bool = { true }
+    private var verificationFrame: CGRect?
+
+    var needsFrameRetry: Bool {
+        guard !isCancelled, let verificationFrame else { return false }
+        return windowSet.needsFrameRetry(windowID: frameAssignment.window.id, expected: verificationFrame)
+    }
 
     init(frameAssignment: FrameAssignment<Window>, windowSet: WindowSet<Window>) {
         self.frameAssignment = frameAssignment
@@ -135,7 +151,7 @@ class FrameAssignmentOperation<Window: WindowType>: Operation {
             // Keep the focused-window resize and final move together. Previously an
             // old operation could wait for the main queue, get cancelled, and still
             // overwrite a newer layout when its queued setFrame finally ran.
-            self.windowSet.perform(frameAssignment: self.frameAssignment)
+            self.verificationFrame = self.windowSet.perform(frameAssignment: self.frameAssignment)
         }
         if Thread.isMainThread {
             apply()
@@ -225,7 +241,8 @@ struct FrameAssignment<Window: WindowType> {
     }
 
     /// Perform the actual application of the frame to the window
-    func perform(withWindow window: Window) {
+    @discardableResult
+    func perform(withWindow window: Window) -> CGRect {
         let originalFrame = window.frame()
         var finalFrame = self.finalFrame
         var finalOrigin = finalFrame.origin
@@ -259,5 +276,9 @@ struct FrameAssignment<Window: WindowType> {
         log.debug(
             "Frame assignment applied: window=\(window.id()) requested=\(finalFrame) observed=\(window.frame())"
         )
+        // Verify the peeking-adjusted position, but retain the desired size. An
+        // ignored shrink can otherwise look like an application's minimum size.
+        // ScreenManager bounds retries when a real size constraint persists.
+        return CGRect(origin: finalOrigin, size: self.finalFrame.size)
     }
 }

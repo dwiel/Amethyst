@@ -227,10 +227,14 @@ final class ReflowRegressionTests: XCTestCase {
         return manager
     }
 
-    private func finishReflow(_ manager: ScreenManager<TestDelegate>, delegate: TestDelegate) {
+    private func finishReflow(_ manager: ScreenManager<TestDelegate>, delegate: TestDelegate, request: (() -> Void)? = nil) {
         let completed = expectation(description: "reflow completed")
         delegate.onCompletion = { completed.fulfill() }
-        manager.setNeedsReflow()
+        if let request {
+            request()
+        } else {
+            manager.setNeedsReflow()
+        }
         waitForExpectations(timeout: 3)
         delegate.onCompletion = nil
     }
@@ -317,5 +321,110 @@ final class ReflowRegressionTests: XCTestCase {
         operation.cancel()
         operation.main()
         XCTAssertTrue(window.assignedFrames.isEmpty)
+    }
+
+    func testReturnFromOtherDisplayRetriesIgnoredMoveWithUnchangedMembership() {
+        let delegate = TestDelegate()
+        let first = TestWindow(element: nil)!
+        let returned = TestWindow(element: nil)!
+        returned.isFocusedValue = true
+        delegate.windows = [first, returned]
+        let manager = manager(delegate)
+        finishReflow(manager, delegate: delegate)
+        let correctFrame = returned.frame()
+
+        // After an out-and-back throw, Chrome ignores both focused-window writes.
+        let strandedFrame = CGRect(x: 0, y: 0, width: 1000, height: 1000)
+        returned.setFrame(strandedFrame, withThreshold: .zero)
+        returned.frameTransform = { _ in strandedFrame }
+        finishReflow(manager, delegate: delegate)
+        XCTAssertEqual(returned.frame(), strandedFrame)
+        XCTAssertFalse(manager.needsReflow(windowIDs: Set([first.id(), returned.id()]), in: space))
+
+        returned.frameTransform = nil
+        finishReflow(manager, delegate: delegate) {
+            XCTAssertTrue(manager.retryUnappliedFramesIfNeeded())
+        }
+        XCTAssertEqual(returned.frame(), correctFrame)
+        XCTAssertFalse(manager.retryUnappliedFramesIfNeeded())
+    }
+
+    func testDelayedFrameAcceptanceNeedsNoRetry() {
+        let delegate = TestDelegate()
+        let window = TestWindow(element: nil)!
+        window.frameTransform = { _ in .zero }
+        delegate.windows = [window]
+        let manager = manager(delegate)
+        finishReflow(manager, delegate: delegate)
+        // AX reports the old frame immediately, but the app applies it later.
+        window.frameTransform = nil
+        window.setFrame(window.assignedFrames.last!, withThreshold: .zero)
+        XCTAssertFalse(manager.retryUnappliedFramesIfNeeded())
+        XCTAssertEqual(delegate.completions, 1)
+    }
+
+    func testFrameOverwrittenAfterCompletionIsStillVerified() {
+        let delegate = TestDelegate()
+        let window = TestWindow(element: nil)!
+        delegate.windows = [window]
+        let manager = manager(delegate)
+        finishReflow(manager, delegate: delegate)
+        let correctFrame = window.frame()
+        window.setFrame(.zero, withThreshold: .zero)
+        finishReflow(manager, delegate: delegate) {
+            XCTAssertTrue(manager.retryUnappliedFramesIfNeeded())
+        }
+        XCTAssertEqual(window.frame(), correctFrame)
+    }
+
+    func testPermanentSizeConstraintStopsAfterThreeRetries() {
+        let delegate = TestDelegate()
+        let window = TestWindow(element: nil)!
+        window.isFocusedValue = true
+        window.frameTransform = { CGRect(origin: $0.origin, size: CGSize(width: max(1200, $0.width), height: $0.height)) }
+        delegate.windows = [TestWindow(element: nil)!, window]
+        let manager = manager(delegate)
+        finishReflow(manager, delegate: delegate)
+        for _ in 0..<3 {
+            finishReflow(manager, delegate: delegate) {
+                XCTAssertTrue(manager.retryUnappliedFramesIfNeeded())
+            }
+        }
+        XCTAssertFalse(manager.retryUnappliedFramesIfNeeded())
+        XCTAssertFalse(manager.retryUnappliedFramesIfNeeded())
+        XCTAssertEqual(delegate.completions, 4)
+        XCTAssertEqual(window.frame().width, 1200)
+        XCTAssertEqual(window.frame().maxX, 2000) // Keep the focused window on screen.
+    }
+
+    func testNewLayoutDiscardsOldFrameVerification() {
+        let delegate = TestDelegate()
+        let window = TestWindow(element: nil)!
+        window.frameTransform = { _ in .zero }
+        delegate.windows = [TestWindow(element: nil)!, window]
+        let manager = manager(delegate)
+        finishReflow(manager, delegate: delegate)
+        window.frameTransform = nil
+        finishReflow(manager, delegate: delegate) {
+            manager.selectLayout(FullscreenLayout<TestWindow>.layoutKey)
+            XCTAssertFalse(manager.retryUnappliedFramesIfNeeded())
+        }
+        XCTAssertEqual(window.frame().width, 2000)
+        XCTAssertFalse(manager.retryUnappliedFramesIfNeeded())
+    }
+
+    func testSpaceChangeDiscardsOldFrameVerification() {
+        let delegate = TestDelegate()
+        let window = TestWindow(element: nil)!
+        window.frameTransform = { _ in .zero }
+        delegate.windows = [window]
+        let manager = manager(delegate)
+        finishReflow(manager, delegate: delegate)
+        TestScreen.descriptions = [JSON([
+            "Display Identifier": manager.screen!.screenID()!,
+            "Current Space": ["ManagedSpaceID": 2, "type": 0, "uuid": "other-space"]
+        ])]
+        XCTAssertFalse(manager.retryUnappliedFramesIfNeeded())
+        XCTAssertEqual(delegate.completions, 1)
     }
 }
