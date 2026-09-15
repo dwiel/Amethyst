@@ -33,8 +33,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @IBOutlet var layoutsMenuItem: NSMenuItem?
 
     private var isFirstLaunch = true
+    private var isTestRun: Bool { CommandLine.arguments.dropFirst().first == "test" }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The hosted unit tests use the app executable, but must not manage real
+        // windows, capture context, or change the user's saved configuration.
+        guard !isTestRun else { return }
         let persistentLogFileURL = configurePersistentLogging()
 
         #if DEBUG
@@ -93,6 +97,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     override func awakeFromNib() {
         super.awakeFromNib()
+        guard !isTestRun else { return }
 
         let version = Bundle.main.infoDictionary?["CFBundleVersion"] as! String
         let shortVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as! String
@@ -117,6 +122,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
+        guard !isTestRun else { return }
         guard !isFirstLaunch else {
             isFirstLaunch = false
             return

@@ -141,6 +141,36 @@ activation, or a general remote-control channel.
 4. **Silent active-set drift / empty pane** — a window can leave the current Space (Mission Control drag, app self-move, missed AX remove) without any remove/space notification. Remaining windows keep old frames (e.g. half-width alone). Fix: regenerate on-screen cache every reflow + 1s reconcile timer compares live active IDs vs last reflow snapshot and reflows on drift. Log: `Active window set drift: … — reflowing`.
 5. **Native context capture** — `ContextCapture.swift` replaces Hammerspoon as the producer of `~/.context/YYYY-MM-DD.jsonl`. It preserves focus/space, 15s input-count pulses, idle, sleep/wake, lock/unlock, and the existing problem-tag state. It also records deduplicated `window_snapshot` events every 15s and before sleep/lock, covering manageable top-level windows across all Spaces. Each window carries `space` (ManagedSpaceID) **and** `desktop` (1-based Mission Control order); the event also has `desktops` so empty Desktops stay in the map. Reboot/crash recovery is PATH `window-layout previous-startup` (last snapshot before **machine boot**). Amethyst relaunch is `window-layout previous-launch` — that cutoff is **wrong** for overnight crash restore once you `pkill`/reinstall Amethyst during the repair. Consumers remain `hscontext`, `attention`, `focus-time`, `context-search`, `life-timeline`, and `life-metrics`. Health: `attention doctor`; launch proof: `rg 'Context capture started' ~/Library/Logs/Amethyst/Amethyst.log | tail -3`. It intentionally drops iTerm AppleScript CWD lookup (Atuin remains the shell/CWD source).
 
+## Reflow races (0.24.3.16, 2026-09-15)
+
+The retained logs showed overlapping layout jobs during display changes. On
+2026-09-14 at 12:47:32, AgentMux window 86483 received both the old 3840×2135
+target and the new 2048×1281 target. At 12:52:17, tall and fullscreen jobs for
+the same display/Space interleaved. These examples establish stale jobs running;
+they do not establish which particular layout symptom the user noticed.
+
+- Coalesce queued reflow requests. Check cancellation and the current request,
+  Space, display frame, and tiling state on the main thread before applying an
+  assignment. Keep the focused-window resize and final move together so an old
+  job cannot overwrite newer work between those two steps.
+- Each ScreenManager records the window IDs, Space, and display geometry from
+  its own completed layout. Do not sample all screens on any one completion:
+  that can erase evidence of a departure on a different screen or during the
+  layout itself. Recovery compares against the completed layout and retries
+  once pending work finishes. Floating layouts and active drags remain exempt.
+- Logs include reflow generation numbers and completed window IDs. The existing
+  requested/observed frame logs still distinguish app minimum-size constraints
+  from incorrect layout calculations; this patch does not change minimum sizes.
+
+Regression tests: `AmethystTests/ReflowRegressionTests`. The test-plan `test`
+argument now prevents the hosted test app from managing real windows, capturing
+context, or loading/saving the user's app configuration.
+
+Validated 2026-09-15: all 163 unit tests passed (including six new regression
+tests); Release build signed with the existing local identity; installed
+0.24.3.16 / 129.16. Launch at 12:29:53 logged current reflows on both displays
+and native context capture. Backup: `artifacts/Amethyst-0.24.3.15-before-reflow-fix-20260915.app`.
+
 ## Commit / push
 
 ```bash

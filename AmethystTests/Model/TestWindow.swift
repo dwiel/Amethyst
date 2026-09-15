@@ -21,6 +21,8 @@ final class TestWindow: WindowType {
     private let uuid = UUID().uuidString
     private var _frame: CGRect = .zero
     var isFocusedValue = false
+    var onSetFrame: (() -> Void)?
+    private(set) var assignedFrames: [CGRect] = []
 
     static func currentlyFocused() -> Self? {
         return (focused as? Self)
@@ -48,6 +50,8 @@ final class TestWindow: WindowType {
 
     func setFrame(_ frame: CGRect, withThreshold threshold: CGSize) {
         _frame = frame
+        assignedFrames.append(frame)
+        onSetFrame?()
     }
 
     func isFocused() -> Bool {

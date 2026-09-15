@@ -50,6 +50,21 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
         target: nil
     )
     private let reflowOperationQueue = OperationQueue()
+    private var reflowGeneration: UInt = 0
+    private var reflowQueued = false
+    private(set) var lastReflowWindowIDs: Set<Window.WindowID>?
+    private(set) var lastReflowSpace: Space?
+    private var lastReflowScreenFrame: CGRect?
+    private var lastReflowAdjustedFrame: CGRect?
+
+    var hasPendingReflow: Bool {
+        return reflowQueued || reflowOperationQueue.operationCount > 0
+    }
+
+    func needsReflow(windowIDs: Set<Window.WindowID>, in space: Space) -> Bool {
+        return lastReflowWindowIDs != windowIDs || lastReflowSpace != space ||
+            lastReflowScreenFrame != screen?.frame() || lastReflowAdjustedFrame != screen?.adjustedFrame()
+    }
 
     private var layouts: [Layout<Window>] = []
     private var currentLayoutIndexBySpaceUUID: [String: Int] = [:]
@@ -201,6 +216,7 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
     }
 
     func setNeedsReflow() {
+        reflowGeneration &+= 1
         let cancelledOperationCount = reflowOperationQueue.operationCount
         reflowOperationQueue.cancelAllOperations()
 
@@ -209,7 +225,11 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
                 "trackedSpace=\(String(describing: space)) cancelledOperations=\(cancelledOperationCount)"
         )
 
+        // Coalesce notifications that arrive before the main queue gets to reflow.
+        guard !reflowQueued else { return }
+        reflowQueued = true
         DispatchQueue.main.async {
+            self.reflowQueued = false
             self.minimizeWindows()
             self.reflow()
         }
@@ -299,11 +319,24 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
             return
         }
 
+        let generation = reflowGeneration
         log.debug(
             "Reflow scheduling: screen=\(screenID) screenFrame=\(screen.frame()) " +
                 "space=\(currentSpace.uuid) layout=\(layout.layoutKey) " +
-                "windows=\(windows.windows.count) assignments=\(frameAssignments.count)"
+                "windows=\(windows.windows.count) assignments=\(frameAssignments.count) generation=\(generation)"
         )
+
+        let screenFrame = screen.frame()
+        let adjustedFrame = screen.adjustedFrame()
+        let windowIDs = Set(windows.windows.map { $0.id })
+        let isCurrent: () -> Bool = { [weak self] in
+            guard let self, let liveScreen = self.screen else { return false }
+            return self.reflowGeneration == generation && self.userConfiguration.tilingEnabled &&
+                liveScreen.screenID() == screenID && liveScreen.frame() == screenFrame &&
+                liveScreen.adjustedFrame() == adjustedFrame &&
+                CGSpacesInfo<Window>.currentSpaceForScreen(liveScreen) == currentSpace
+        }
+        frameAssignments.forEach { $0.isReflowCurrent = isCurrent }
 
         // TODO: fix mff
 //        let mouseFollowsFocus = userConfiguration.mouseFollowsFocus()
@@ -320,13 +353,23 @@ final class ScreenManager<Delegate: ScreenManagerDelegate>: NSObject, Codable {
                 return
             }
 
-            log.debug(
-                "Reflow completed: screen=\(screenID) space=\(currentSpace.uuid) " +
-                    "layout=\(layout.layoutKey) assignments=\(frameAssignments.count)"
-            )
-
             DispatchQueue.main.async {
-                self?.delegate?.onReflowCompletion()
+                guard let self, isCurrent() else {
+                    log.debug("Reflow completion discarded: screen=\(screenID) generation=\(generation) is stale")
+                    return
+                }
+                // Remember what THIS screen laid out, not a fresh sample of every
+                // display. A window can leave during reflow or on the other screen.
+                self.lastReflowWindowIDs = windowIDs
+                self.lastReflowSpace = currentSpace
+                self.lastReflowScreenFrame = screenFrame
+                self.lastReflowAdjustedFrame = adjustedFrame
+                log.debug(
+                    "Reflow completed: screen=\(screenID) space=\(currentSpace.uuid) " +
+                        "layout=\(layout.layoutKey) assignments=\(frameAssignments.count) " +
+                        "generation=\(generation) windowIDs=\(windowIDs.map { String(describing: $0) }.sorted())"
+                )
+                self.delegate?.onReflowCompletion()
                 // TODO: fix mff
 //                if mouseFollowsFocus {
 //                    if case .windowSwap(let window, _) = event {

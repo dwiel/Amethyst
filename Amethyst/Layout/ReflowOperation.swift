@@ -116,6 +116,8 @@ struct WindowSet<Window: WindowType> {
 class FrameAssignmentOperation<Window: WindowType>: Operation {
     let frameAssignment: FrameAssignment<Window>
     let windowSet: WindowSet<Window>
+    /// Evaluated on the main thread, immediately before touching the window.
+    var isReflowCurrent: () -> Bool = { true }
 
     init(frameAssignment: FrameAssignment<Window>, windowSet: WindowSet<Window>) {
         self.frameAssignment = frameAssignment
@@ -124,12 +126,22 @@ class FrameAssignmentOperation<Window: WindowType>: Operation {
     }
 
     override func main() {
-        guard !isCancelled else {
-            log.debug("Frame assignment cancelled: window=\(frameAssignment.window.id)")
-            return
-        }
+        let apply = {
+            guard !self.isCancelled, self.isReflowCurrent() else {
+                log.debug("Frame assignment cancelled: window=\(self.frameAssignment.window.id)")
+                return
+            }
 
-        windowSet.perform(frameAssignment: frameAssignment)
+            // Keep the focused-window resize and final move together. Previously an
+            // old operation could wait for the main queue, get cancelled, and still
+            // overwrite a newer layout when its queued setFrame finally ran.
+            self.windowSet.perform(frameAssignment: self.frameAssignment)
+        }
+        if Thread.isMainThread {
+            apply()
+        } else {
+            DispatchQueue.main.sync(execute: apply)
+        }
     }
 }
 
@@ -229,9 +241,7 @@ struct FrameAssignment<Window: WindowType> {
             // Just resize the window first to see what the dimensions end up being
             // Sometimes applications have internal window requirements that are not exposed to us directly
             finalFrame.origin = window.frame().origin
-            DispatchQueue.main.sync {
-                window.setFrame(finalFrame, withThreshold: CGSize(width: 1, height: 1))
-            }
+            window.setFrame(finalFrame, withThreshold: CGSize(width: 1, height: 1))
 
             // With the real height we can update the frame to account for the current size
             finalFrame.size = CGSize(
@@ -244,9 +254,7 @@ struct FrameAssignment<Window: WindowType> {
 
         // Move the window to its final frame
         finalFrame.origin = finalOrigin
-        DispatchQueue.main.sync {
-            window.setFrame(finalFrame, withThreshold: CGSize(width: 1, height: 1))
-        }
+        window.setFrame(finalFrame, withThreshold: CGSize(width: 1, height: 1))
 
         log.debug(
             "Frame assignment applied: window=\(window.id()) requested=\(finalFrame) observed=\(window.frame())"

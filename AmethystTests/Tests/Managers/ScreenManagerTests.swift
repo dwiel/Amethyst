@@ -10,21 +10,36 @@
 import Nimble
 import Quick
 import Silica
+import SwiftyJSON
+import XCTest
 
 private final class TestDelegate: ScreenManagerDelegate {
     typealias Window = TestWindow
+    var windows: [TestWindow] = []
+    var activeSetRequests = 0
+    var completions = 0
+    var onInitiation: (() -> Void)?
+    var onCompletion: (() -> Void)?
 
     func applyWindowLimit(forScreenManager screenManager: ScreenManager<TestDelegate>, minimizingIn range: (Int) -> Range<Int>) {
-        fatalError()
+        // The fake windows never minimize real applications.
     }
     func activeWindowSet(forScreenManager screenManager: ScreenManager<TestDelegate>) -> WindowSet<TestWindow> {
-        fatalError()
+        activeSetRequests += 1
+        let snapshot = windows
+        return WindowSet(
+            windows: snapshot.map { LayoutWindow(id: $0.id(), frame: $0.frame(), isFocused: $0.isFocused()) },
+            isWindowWithIDActive: { _ in true },
+            isWindowWithIDFloating: { _ in false },
+            windowForID: { id in snapshot.first { $0.id() == id } }
+        )
     }
     func onReflowInitiation() {
-        fatalError()
+        onInitiation?()
     }
     func onReflowCompletion() {
-        fatalError()
+        completions += 1
+        onCompletion?()
     }
 }
 
@@ -185,5 +200,122 @@ class ScreenManagerTests: QuickSpec {
                 }
             }
         }
+    }
+}
+
+
+final class ReflowRegressionTests: XCTestCase {
+    private let space = Space(id: 1, type: CGSSpaceTypeUser, uuid: "test-space")
+
+    override func tearDown() {
+        TestScreen.availableScreens = []
+        TestScreen.descriptions = []
+        super.tearDown()
+    }
+
+    private func manager(_ delegate: TestDelegate) -> ScreenManager<TestDelegate> {
+        let screen = TestScreen(frame: CGRect(x: 0, y: 0, width: 2000, height: 1000))
+        TestScreen.availableScreens.append(screen)
+        TestScreen.descriptions.append(JSON([
+            "Display Identifier": screen.screenID()!,
+            "Current Space": ["ManagedSpaceID": 1, "type": 0, "uuid": "test-space"]
+        ]))
+        let configuration = UserConfiguration(storage: TestConfigurationStorage())
+        configuration.setLayoutKeys([TallLayout<TestWindow>.layoutKey, FullscreenLayout<TestWindow>.layoutKey])
+        let manager = ScreenManager(screen: screen, delegate: delegate, userConfiguration: configuration)
+        manager.updateSpace(to: space)
+        return manager
+    }
+
+    private func finishReflow(_ manager: ScreenManager<TestDelegate>, delegate: TestDelegate) {
+        let completed = expectation(description: "reflow completed")
+        delegate.onCompletion = { completed.fulfill() }
+        manager.setNeedsReflow()
+        waitForExpectations(timeout: 3)
+        delegate.onCompletion = nil
+    }
+
+    func testCoalescesPendingRequests() {
+        let delegate = TestDelegate()
+        delegate.windows = [TestWindow(element: nil)!]
+        let manager = manager(delegate)
+        manager.setNeedsReflow()
+        manager.setNeedsReflow()
+        finishReflow(manager, delegate: delegate)
+        XCTAssertEqual(delegate.activeSetRequests, 1)
+        XCTAssertEqual(delegate.completions, 1)
+    }
+
+    func testDepartureDuringReflowRemainsVisibleToRecovery() {
+        let delegate = TestDelegate()
+        let first = TestWindow(element: nil)!
+        let second = TestWindow(element: nil)!
+        delegate.windows = [first, second]
+        let manager = manager(delegate)
+        // A silent departure after the layout was calculated, before completion.
+        delegate.onInitiation = { delegate.windows = [first] }
+        finishReflow(manager, delegate: delegate)
+        XCTAssertEqual(manager.lastReflowWindowIDs, Set([first.id(), second.id()]))
+        XCTAssertTrue(manager.needsReflow(windowIDs: Set([first.id()]), in: space))
+        finishReflow(manager, delegate: delegate)
+        XCTAssertFalse(manager.needsReflow(windowIDs: Set([first.id()]), in: space))
+    }
+
+    func testOtherDisplayCompletionDoesNotErasePendingDeparture() {
+        let firstDelegate = TestDelegate()
+        let first = TestWindow(element: nil)!
+        let departed = TestWindow(element: nil)!
+        firstDelegate.windows = [first, departed]
+        let firstManager = manager(firstDelegate)
+        finishReflow(firstManager, delegate: firstDelegate)
+        firstDelegate.windows = [first]
+
+        let otherDelegate = TestDelegate()
+        otherDelegate.windows = [TestWindow(element: nil)!]
+        let otherManager = manager(otherDelegate)
+        finishReflow(otherManager, delegate: otherDelegate)
+        XCTAssertTrue(firstManager.needsReflow(windowIDs: Set([first.id()]), in: space))
+    }
+
+    func testSupersededLayoutNeverMovesWindowsOrReportsCompletion() {
+        let delegate = TestDelegate()
+        let windows = [TestWindow(element: nil)!, TestWindow(element: nil)!]
+        delegate.windows = windows
+        let manager = manager(delegate)
+        // Replace the two-pane layout after calculation, while its jobs are queued.
+        delegate.onInitiation = {
+            delegate.onInitiation = nil
+            manager.selectLayout(FullscreenLayout<TestWindow>.layoutKey)
+        }
+        finishReflow(manager, delegate: delegate)
+        XCTAssertEqual(delegate.completions, 1)
+        for window in windows {
+            XCTAssertEqual(window.assignedFrames.count, 1)
+            XCTAssertEqual(window.frame().width, 2000)
+        }
+    }
+
+    func testDisplaySizeChangeRequiresRecoveryEvenWithSameWindows() {
+        let delegate = TestDelegate()
+        let window = TestWindow(element: nil)!
+        delegate.windows = [window]
+        let manager = manager(delegate)
+        finishReflow(manager, delegate: delegate)
+        XCTAssertFalse(manager.needsReflow(windowIDs: Set([window.id()]), in: space))
+        manager.screen!.internalFrame = CGRect(x: 0, y: 0, width: 1000, height: 800)
+        XCTAssertTrue(manager.needsReflow(windowIDs: Set([window.id()]), in: space))
+    }
+
+    func testCancelledOperationDoesNotWriteFrames() {
+        let delegate = TestDelegate()
+        let window = TestWindow(element: nil)!
+        delegate.windows = [window]
+        let manager = manager(delegate)
+        let operation = TallLayout<TestWindow>().frameAssignments(
+            delegate.activeWindowSet(forScreenManager: manager), on: manager.screen!
+        )!.first!
+        operation.cancel()
+        operation.main()
+        XCTAssertTrue(window.assignedFrames.isEmpty)
     }
 }

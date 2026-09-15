@@ -119,10 +119,6 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
     private var pendingTabDetection: [Window.WindowID: Window] = [:]
     private var earlyFocusedWindows: Set<Window.WindowID> = []
     private var eventQueue: [PendingEvent] = []
-    /// Last active (on-screen, current-space) window IDs per screen after a reflow.
-    /// Used to detect silent departures (Mission Control drag, app self-move) that
-    /// never deliver remove/space-change notifications — classic empty-pane gaps.
-    private var lastActiveWindowIDsByScreen: [String: Set<CGWindowID>] = [:]
     private var activeWindowReconcileTimer: Timer?
 
     private lazy var mouseStateKeeper = MouseStateKeeper(delegate: self)
@@ -483,25 +479,23 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
                 continue
             }
 
-            let activeIDs = Set(windows.activeWindows(onScreen: screen).map { $0.cgID() })
-            let previousIDs = lastActiveWindowIDsByScreen[screenID]
-
-            // First observation after launch: seed without forcing a duplicate reflow.
-            guard let previousIDs else {
-                lastActiveWindowIDsByScreen[screenID] = activeIDs
+            guard !screenManager.hasPendingReflow,
+                  !(screenManager.currentLayout is FloatingLayout),
+                  let currentSpace = CGSpacesInfo<Window>.currentSpaceForScreen(screen),
+                  currentSpace.type == CGSSpaceTypeUser else {
                 continue
             }
 
-            guard previousIDs != activeIDs else {
+            let activeIDs = Set(windows.activeWindows(onScreen: screen).map { $0.id() })
+            guard screenManager.needsReflow(windowIDs: activeIDs, in: currentSpace) else {
                 continue
             }
 
             log.debug(
                 "Active window set drift: screen=\(screenID) " +
-                    "previous=\(previousIDs.sorted()) current=\(activeIDs.sorted()) — reflowing"
+                    "previous=\(String(describing: screenManager.lastReflowWindowIDs)) " +
+                    "current=\(activeIDs.map { String(describing: $0) }.sorted()) — reflowing"
             )
-            // Update immediately so we do not thrash every tick while the reflow is queued.
-            lastActiveWindowIDsByScreen[screenID] = activeIDs
             markScreenForReflow(screen)
         }
     }
@@ -1076,24 +1070,9 @@ extension WindowManager {
 //            doMouseFollowsFocus(focusedWindow: focusedWindow)
 //        }
 
-        // This handler will be executed by the Operation, in a queue.  Although async
-        // (and although the docs say that it executes in a separate thread), I consider
-        // this to be thread safe, at least safe enough, because we always want the
-        // latest time that a reflow took place.
+        // ScreenManager calls this on the main thread after a current reflow finishes.
         mouseStateKeeper.handleReflowEvent()
         lastReflowTime = Date()
-
-        // Snapshot the active set Amethyst just laid out so silent departures can be
-        // detected by reconcileActiveWindowsIfNeeded().
-        windows.regenerateActiveIDCache()
-        for screenManager in screens.screenManagers {
-            guard let screen = screenManager.screen, let screenID = screen.screenID() else {
-                continue
-            }
-            lastActiveWindowIDsByScreen[screenID] = Set(
-                windows.activeWindows(onScreen: screen).map { $0.cgID() }
-            )
-        }
     }
 
     func doMouseFollowsFocus(focusedWindow: Window) {
