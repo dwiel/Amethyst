@@ -198,15 +198,32 @@ struct ApplicationObservation<Delegate: ApplicationObservationDelegate> {
      An observable that attemps to subscribe to events on the application. The observable completes when subscriptions have been put in place, and errors otherwise.
      */
     func addObservers() -> Observable<Void> {
+        // A freshly launched app can answer accessibility with cannotComplete
+        // (-25204) for a long time: AgentMux restoring 40 columns did so for
+        // more than 20 s on 2026-10-15, outlived the old six quick retries,
+        // and was never managed. Each failed attempt already costs the AX
+        // messaging timeout (~3 s), so back off for real and keep trying for
+        // minutes, not seconds.
         return _addObservers(notifications: Notification.applicationNotifications).retry { errorTrigger in
             errorTrigger.enumerated().flatMap { count, error -> Observable<Int> in
-                guard count < 6 else {
+                guard count < 12 else {
                     return .error(error)
                 }
 
-                return .timer(.milliseconds((count ^ 2 * 100)), scheduler: MainScheduler.instance)
+                return .timer(
+                    .milliseconds(ApplicationObservation.retryDelayMilliseconds(attempt: count, baseMilliseconds: 500, capMilliseconds: 60_000)),
+                    scheduler: MainScheduler.instance
+                )
             }
         }
+    }
+
+    /// Exponential backoff: base × 2^attempt, capped. (`^` is XOR in Swift; the
+    /// original `count ^ 2 * 100` produced 200, 300, 0, 100, 600, 700 ms.)
+    static func retryDelayMilliseconds(attempt: Int, baseMilliseconds: Int, capMilliseconds: Int) -> Int {
+        let exponent = max(0, min(attempt, 20))
+        let delay = baseMilliseconds * (1 << exponent)
+        return min(delay, capMilliseconds)
     }
 
     /**
@@ -221,7 +238,10 @@ struct ApplicationObservation<Delegate: ApplicationObservationDelegate> {
                     return .error(error)
                 }
 
-                return .timer(.milliseconds((count ^ 2 * 100)), scheduler: MainScheduler.instance)
+                return .timer(
+                    .milliseconds(ApplicationObservation.retryDelayMilliseconds(attempt: count, baseMilliseconds: 100, capMilliseconds: 5_000)),
+                    scheduler: MainScheduler.instance
+                )
             }
         }
     }

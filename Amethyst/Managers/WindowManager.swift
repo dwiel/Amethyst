@@ -112,6 +112,9 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
 
     private var applications: [pid_t: AnyApplication<Application>] = [:]
     private var applicationObservations: [pid_t: UndeterminedApplication] = [:]
+    /// Applications whose accessibility observers are still being attached
+    /// (retrying); a second add for the same pid must not double-register.
+    private var pendingApplicationPIDs: Set<pid_t> = []
     private var screens: Screens
     private let windows = Windows()
     private var lastReflowTime = Date()
@@ -515,6 +518,19 @@ final class WindowManager<Application: ApplicationType>: NSObject, Codable {
     }
 
     @objc func applicationActivated(_ sender: AnyObject) {
+        // An app whose accessibility observers could not be attached at launch
+        // (2026-10-15: AgentMux restoring 40 columns answered cannotComplete
+        // for 20 s and was never managed, so its windows never tiled) gets
+        // another chance the moment the user focuses one of its windows.
+        if let frontmost = NSWorkspace.shared.frontmostApplication {
+            let pid = frontmost.processIdentifier
+            if applicationWithPID(pid) == nil,
+               applicationObservations[pid] == nil,
+               !pendingApplicationPIDs.contains(pid) {
+                log.info("Frontmost application \(frontmost.localizedName ?? "<unknown>") (\(pid)) is not managed — adding it now")
+                add(runningApplication: frontmost)
+            }
+        }
         guard let focusedWindow = Window.currentlyFocused(), let screen = focusedWindow.screen() else {
             return
         }
@@ -652,18 +668,31 @@ extension WindowManager {
     }
 
     fileprivate func add(application: AnyApplication<Application>) {
-        guard applications[application.pid()] == nil else {
+        let pid = application.pid()
+        guard applications[pid] == nil else {
             for window in application.windows() {
                 add(window: window)
             }
             return
         }
+        guard !pendingApplicationPIDs.contains(pid) else {
+            return
+        }
+        pendingApplicationPIDs.insert(pid)
 
         ApplicationObservation(application: application, delegate: self)
             .addObservers()
             .subscribe(
+                onError: { [weak self] error in
+                    self?.pendingApplicationPIDs.remove(pid)
+                    log.error(
+                        "Giving up on observing application \(application.title() ?? "<unknown>") (\(pid)): \(error) — " +
+                            "it is retried when one of its windows is focused"
+                    )
+                },
                 onCompleted: { [weak self] in
-                    self?.applications[application.pid()] = application
+                    self?.pendingApplicationPIDs.remove(pid)
+                    self?.applications[pid] = application
 
                     for window in application.windows() {
                         self?.add(window: window)
@@ -678,6 +707,7 @@ extension WindowManager {
             remove(window: window)
         }
         applications.removeValue(forKey: application.pid())
+        pendingApplicationPIDs.remove(application.pid())
     }
 
     fileprivate func activate(application: AnyApplication<Application>) {
