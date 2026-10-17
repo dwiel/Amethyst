@@ -15,9 +15,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if ! security find-identity -v -p codesigning | grep -q "$signing_identity_sha1"; then
+# Look the identity up without -v: a self-signed cert whose trust settings were
+# lost (CSSMERR_TP_NOT_TRUSTED) still signs by hash, and the designated
+# requirement (certificate root = H"...") that Accessibility is keyed on does
+# not depend on trust. Requiring -v blocked the 0.24.3.18 install for a day.
+if ! security find-identity -p codesigning | grep -q "$signing_identity_sha1"; then
     echo "Missing code-signing identity: $signing_identity_name ($signing_identity_sha1)" >&2
     exit 1
+fi
+if ! security find-identity -v -p codesigning | grep -q "$signing_identity_sha1"; then
+    echo "Note: $signing_identity_name is not trusted; signing by hash anyway (TCC grant unaffected)." >&2
 fi
 
 # The project requires SwiftLint in its build phase. Local diagnostic builds do
