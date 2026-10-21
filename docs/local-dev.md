@@ -205,6 +205,18 @@ and `attention doctor` reports healthy native capture. The ignored write was
 reproduced with fake windows in tests; no live display throw was driven during
 verification. Backup: `artifacts/Amethyst-0.24.3.16-before-frame-retry-20260915.app`.
 
+## Windows stranded in tab detection (0.24.3.19, 2026-10-20)
+
+A new window arrives via `mainWindowChanged` → `swapInTab`, which parks it in
+`pendingTabDetection` until a focus event settles "new tab or new window".
+When an app opens several windows at once (AgentMux restoring two windows), the
+focus event can race ahead unrecorded and land on a sibling, so the first
+window was never added: untiled at its launch frame, invisible to reflow,
+until something focused it. A desktop throw in that state also bounced back.
+Now a parked window settles via `completeTabDetection` after 1 s without
+focus (log: `Tab detection got no focus within`). Tests run with a swiftlint
+no-op shim on PATH (same as `build-local.sh`); 169 passed.
+
 ## Commit / push
 
 ```bash

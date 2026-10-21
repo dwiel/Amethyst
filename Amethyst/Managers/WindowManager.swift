@@ -1056,8 +1056,29 @@ extension WindowManager {
             completeTabDetection(for: window, on: screen)
         } else {
             pendingTabDetection[window.id()] = window
+            schedulePendingTabFallback(for: window, on: screen)
         }
     }
+
+    /// A window parked for tab detection waits for its focus event. If that focus already went by
+    /// unrecorded (focusedWindowChanged raced the window's arrival) or went straight to a sibling,
+    /// the window was never adopted: AgentMux restoring two windows on 2026-10-20 left Window 1
+    /// untiled at its launch frame until a desktop throw happened to focus it. Settle it anyway.
+    private func schedulePendingTabFallback(for window: Window, on screen: Screen) {
+        let windowID = window.id()
+        DispatchQueue.main.asyncAfter(deadline: .now() + WindowManager.pendingTabFallbackSeconds) { [weak self] in
+            guard let self, let pending = self.pendingTabDetection[windowID] else { return }
+            guard !self.windows.isWindowTracked(pending) else {
+                self.pendingTabDetection.removeValue(forKey: windowID)
+                return
+            }
+            log.debug("Tab detection got no focus within \(WindowManager.pendingTabFallbackSeconds)s - settling: \(pending)")
+            self.pendingTabDetection.removeValue(forKey: windowID)
+            self.completeTabDetection(for: pending, on: pending.screen() ?? screen)
+        }
+    }
+
+    private static var pendingTabFallbackSeconds: TimeInterval { 1.0 }
 
     private func completeTabDetection(for window: Window, on screen: Screen) {
         windows.regenerateActiveIDCache()
