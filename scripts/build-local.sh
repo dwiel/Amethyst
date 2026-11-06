@@ -6,8 +6,8 @@ root_dir=$(cd "$(dirname "$0")/.." && pwd)
 signing_identity_sha1="5ACFCCF4BC98802BBE98D36A3499B4847395764A"
 signing_identity_name="Amethyst Local Development"
 app_path="$root_dir/.build/DerivedData/Build/Products/Release/Amethyst.app"
-marketing_version=${MARKETING_VERSION:-0.24.3.2}
-build_version=${CURRENT_PROJECT_VERSION:-129.2}
+marketing_version=${MARKETING_VERSION:-0.25.0.1}
+build_version=${CURRENT_PROJECT_VERSION:-130.1}
 swiftlint_shim_dir=$(mktemp -d "${TMPDIR:-/tmp}/amethyst-build.XXXXXX")
 
 cleanup() {
@@ -40,6 +40,7 @@ PATH="$swiftlint_shim_dir:$PATH" xcodebuild \
     -workspace Amethyst.xcworkspace \
     -scheme Amethyst \
     -configuration Release \
+    -packageAuthorizationProvider netrc \
     -derivedDataPath .build/DerivedData \
     CURRENT_PROJECT_VERSION="$build_version" \
     MARKETING_VERSION="$marketing_version" \

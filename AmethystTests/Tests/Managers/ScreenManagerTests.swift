@@ -24,7 +24,7 @@ private final class TestDelegate: ScreenManagerDelegate {
     func applyWindowLimit(forScreenManager screenManager: ScreenManager<TestDelegate>, minimizingIn range: (Int) -> Range<Int>) {
         // The fake windows never minimize real applications.
     }
-    func activeWindowSet(forScreenManager screenManager: ScreenManager<TestDelegate>) -> WindowSet<TestWindow> {
+    func activeWindowSet(forScreenManager screenManager: ScreenManager<TestDelegate>, on screen: TestScreen) -> WindowSet<TestWindow> {
         activeSetRequests += 1
         let snapshot = windows
         return WindowSet(
@@ -316,7 +316,7 @@ final class ReflowRegressionTests: XCTestCase {
         delegate.windows = [window]
         let manager = manager(delegate)
         let operation = TallLayout<TestWindow>().frameAssignments(
-            delegate.activeWindowSet(forScreenManager: manager), on: manager.screen!
+            delegate.activeWindowSet(forScreenManager: manager, on: manager.screen!), on: manager.screen!
         )!.first!
         operation.cancel()
         operation.main()

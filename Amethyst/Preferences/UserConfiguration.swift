@@ -87,6 +87,7 @@ enum ConfigurationKey: String {
     case layoutHUD = "enables-layout-hud"
     case layoutHUDOnSpaceChange = "enables-layout-hud-on-space-change"
     case windowCountHUD = "enables-window-count-hud"
+    case newWindowsToMainHUD = "enables-new-windows-to-main-hud"
     case useCanaryBuild = "use-canary-build"
     case newWindowsToMain = "new-windows-to-main"
     case followSpaceThrownWindows = "follow-space-thrown-windows"
@@ -99,6 +100,7 @@ enum ConfigurationKey: String {
     case restoreLayoutsOnLaunch = "restore-layouts-on-launch"
     case disablePaddingOnBuiltinDisplay = "disable-padding-on-builtin-display"
     case hideMenuBarIcon = "hide-menu-bar-icon"
+    case startWithTilingDisabled = "start-with-tiling-disabled"
 }
 
 extension ConfigurationKey: CaseIterable {}
@@ -139,6 +141,7 @@ enum CommandKey: String {
     case relaunchAmethyst = "relaunch-amethyst"
     case increaseWindowMaxCount = "increase-window-max-count"
     case decreaseWindowMaxCount = "decrease-window-max-count"
+    case toggleNewWindowsToMain = "toggle-new-windows-to-main"
 }
 
 protocol UserConfigurationDelegate: AnyObject {
@@ -249,7 +252,7 @@ class UserConfiguration: NSObject {
         }
 
         if fallbackToDefault {
-            return defaultConfiguration![keyValue].rawValue as? T
+            return defaultConfiguration?[keyValue].rawValue as? T
         }
 
         return nil
@@ -507,22 +510,6 @@ class UserConfiguration: NSObject {
         return configurationYAML != nil || configurationJSON != nil
     }
 
-    private func modifierFlagsForModifierString(_ modifierString: String) -> AMModifierFlags {
-        switch modifierString {
-        case "mod1":
-            return modifier1!
-        case "mod2":
-            return modifier2!
-        case "mod3":
-            return modifier3!
-        case "mod4":
-            return modifier4!
-        default:
-            log.warning("Unknown modifier string: \(modifierString)")
-            return modifier1!
-        }
-    }
-
     func layoutKeys() -> [String] {
         let layoutKeys = storage.array(forKey: .layouts) as? [String]
         return layoutKeys ?? []
@@ -656,6 +643,10 @@ class UserConfiguration: NSObject {
         return storage.bool(forKey: .windowCountHUD)
     }
 
+    func enablesNewWindowsToMainHUD() -> Bool {
+        return storage.bool(forKey: .newWindowsToMainHUD)
+    }
+
     func useCanaryBuild() -> Bool {
         return storage.bool(forKey: .useCanaryBuild)
     }
@@ -674,9 +665,10 @@ class UserConfiguration: NSObject {
         }
         // if smartWindowMargins is enabled, enabled window margins if there are more than one visible windows on screen
         let options = CGWindowListOption(arrayLiteral: .excludeDesktopElements, .optionOnScreenOnly)
-        let windowsListInfo = CGWindowListCopyWindowInfo(options, CGWindowID(0))
-        let infoList = windowsListInfo as! [[String: Any]]
-        let visibleWindows = infoList.filter { $0["kCGWindowLayer"] as! Int == 0 }
+        guard let infoList = CGWindowListCopyWindowInfo(options, CGWindowID(0)) as? [[String: Any]] else {
+            return true
+        }
+        let visibleWindows = infoList.filter { ($0["kCGWindowLayer"] as? Int) == 0 }
         return visibleWindows.count > 1
     }
 
@@ -719,6 +711,11 @@ class UserConfiguration: NSObject {
         let newCount = max(0, currentCount - 1)
 
         setConfigurationValueWithKVO(Float(newCount), forKey: .windowMaxCount)
+    }
+
+    func toggleNewWindowsToMain() {
+        let currentValue = sendNewWindowsToMainPane()
+        setConfigurationValueWithKVO(!currentValue, forKey: .newWindowsToMain)
     }
 
     func windowResizeStep() -> CGFloat {
@@ -778,6 +775,10 @@ class UserConfiguration: NSObject {
 
     func hideMenuBarIcon() -> Bool {
         return storage.bool(forKey: .hideMenuBarIcon)
+    }
+
+    func startWithTilingDisabled() -> Bool {
+        return storage.bool(forKey: .startWithTilingDisabled)
     }
 }
 

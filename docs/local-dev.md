@@ -26,7 +26,7 @@ Signing identity must stay stable so macOS Accessibility permission is not re-pr
 cd /Users/zdwiel/src/assistant/amethyst
 
 # Build Release + sign with persistent local cert
-MARKETING_VERSION=0.24.3.N CURRENT_PROJECT_VERSION=129.N ./scripts/build-local.sh
+MARKETING_VERSION=0.25.0.N CURRENT_PROJECT_VERSION=130.N ./scripts/build-local.sh
 
 # Install (backup previous if you care)
 pkill -x Amethyst || true
@@ -38,7 +38,7 @@ open -g -a /Applications/Amethyst.app
 
 Agents: `open -a` (no `-g`) is focus-guard denied (exit 77) because it steals keystrokes. `open -g` launches without activating. `rm -rf` of the app is PreToolUse-denied; `trash` then `cp -R`. After relaunch, wait ~15s and `attention doctor` should show `capture: native Amethyst`.
 
-- Script: `scripts/build-local.sh`
+- Script: `scripts/build-local.sh` (defaults to the current local release). Public package downloads use `-packageAuthorizationProvider netrc`: Xcode's default Keychain provider can pause indefinitely looking up GitHub credentials even for public binary artifacts.
 - Identity: **Amethyst Local Development** (`5ACFCCF4BC98802BBE98D36A3499B4847395764A`)
 - Bump `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` each install so the log shows a clear build.
 - Re-signing after `cp` changes the binary MD5 vs DerivedData; that is expected. Trust version string + process path + inode.
@@ -216,6 +216,26 @@ until something focused it. A desktop throw in that state also bounced back.
 Now a parked window settles via `completeTabDetection` after 1 s without
 focus (log: `Tab detection got no focus within`). Tests run with a swiftlint
 no-op shim on PATH (same as `build-local.sh`); 169 passed.
+
+## Upstream 0.25.0 merged (0.25.0.1 / 130.1, 2026-11-06)
+
+Merged the released `v0.25.0` (`f4f1393`), preserving the local context capture,
+window snapshots/control CLI, Accessibility recovery, pending-tab fallback, and
+bounded frame/membership recovery. Overlapping upstream source-screen reflow
+and retry-math fixes were reconciled with our existing fixes. The reflow delegate
+now accepts upstream's explicit screen argument while still refreshing the
+active window cache on every reflow.
+
+Validation: Release build/sign succeeded; all 181 unit tests passed (including
+local reflow regressions and upstream screen/Space tests). Installed with the
+same signing identity. The running executable's inode matches the installed
+app; launch at 15:31:41 logged completed reflows on both displays and native
+context capture. `attention doctor` reports healthy capture. No interactive
+window throws or Desktop switches were used for verification.
+
+Rollback app: `artifacts/Amethyst-0.24.3.19-before-0.25.0-20261106.app`.
+Build/test logs: `.build/upgrade-0.25.0-{build,tests}.log`; test result bundle:
+`.build/upgrade-0.25.0-tests.xcresult` (local artifacts, not committed).
 
 ## Commit / push
 
